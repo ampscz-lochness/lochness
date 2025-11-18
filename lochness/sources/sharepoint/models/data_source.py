@@ -18,6 +18,7 @@ class SharepointDataSourceMetadata(BaseModel):
     keystore_name: str
     site_url: str
     form_name: str
+    form_title: str
     modality: str
     drive_name: str
 
@@ -79,6 +80,7 @@ class SharepointDataSource(BaseModel):
                 data_source_metadata=SharepointDataSourceMetadata(
                     keystore_name=row["data_source_metadata"]["keystore_name"],
                     site_url=row["data_source_metadata"]["site_url"],
+                    form_title=row["data_source_metadata"]["form_title"],
                     form_name=row["data_source_metadata"]["form_name"],
                     modality=row["data_source_metadata"]["modality"],
                     drive_name=row["data_source_metadata"]["drive_name"],
