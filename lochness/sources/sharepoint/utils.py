@@ -125,6 +125,39 @@ def find_subfolder(
     return None
 
 
+def find_subfolders(
+    drive_id: str,
+    parent_id: str,
+    subfolder_name_patt: str,
+    headers: Dict[str, str],
+    timeout: int = 120,
+) -> Optional[List[Dict]]:
+    """
+    Find subfolders by subfolder name pattern within a specified parent folder.
+
+    Args:
+        drive_id (str): The SharePoint drive ID.
+        parent_id (str): The parent folder ID.
+        subfolder_name_patt (str): The name pattern of the subfolders to find.
+        headers (Dict[str, str]): Headers containing the access token.
+        timeout (int): Request timeout in seconds.
+    Returns:
+        Optional[Dict]: The subfolder item if found, else None.
+    """
+    subfolders = []
+    for item in sharepoint_api.list_folder_items(
+        drive_id, parent_id, headers, timeout=timeout
+    ):
+        if subfolder_name_patt.lower() in item.get("name", "").lower() and "folder" in item:
+            logger.info(f"Found subfolder '{subfolder_name_patt}' in parent {parent_id}")
+            subfolders.append(item)
+
+    if subfolders == "":
+        logger.warning(f"Subfolder matching '{subfolder_name_patt}' pattern not found in parent {parent_id}")
+        return None
+
+    return subfolders
+
 def get_matching_subfolders(
     drive_id: str,
     responses_folder: Dict,
