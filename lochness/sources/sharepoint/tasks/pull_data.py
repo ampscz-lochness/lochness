@@ -68,6 +68,7 @@ def fetch_subject_data(
 
     metadata = sharepoint_data_source.data_source_metadata
     form_name = metadata.form_name
+    form_title = metadata.form_title
     modality = getattr(metadata, "modality", "unknown")
 
     identifier = f"{project_id}::{site_id}::{data_source_name}::{subject_id}"
@@ -128,6 +129,7 @@ def fetch_subject_data(
         / subject_id
         / modality
     )
+
     subject_folders = sharepoint_utils.get_matching_subfolders(
         drive_id, site_folder, form_name, headers
     )
@@ -136,14 +138,15 @@ def fetch_subject_data(
         if subject_folder['name'] == subject_id:
             logger.info(f"Found corresponding subfolder for {subject_id}")
             session_folders = sharepoint_utils.get_matching_subfolders(
-                drive_id, subject_folder, subject_id, headers
+                drive_id, subject_folder, subject_id, headers,
+                relaxed_search=True
             )
             for session_folder in session_folders:
                 sharepoint_utils.download_new_or_updated_files(
                     session_folder,
                     drive_id,
                     headers,
-                    form_name,
+                    form_title,
                     subject_id,
                     site_id,
                     project_id,
