@@ -261,7 +261,7 @@ def extract_info(
         pass
 
     try:
-        date_str = data.get("data", {}).get("data", {}).get("dateOfEgg")
+        date_str = data.get("data", {}).get("data", {}).get("dateOfEeg")
         dt = datetime.fromisoformat(date_str)
         # date_only = dt.date()
         dt_str = dt.strftime("%Y_%m_%d")
