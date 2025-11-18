@@ -206,7 +206,7 @@ def fetch_metadata(
         if isinstance(required, str):
             required = required.lower() in ("true", "1", "yes", "y", "TRUE", "Yes", "Y")
         if required:
-            required_variables.add(variable_name)
+            required_variables.add(internal_name)
 
         rename_columns[variable_name] = internal_name
         if variable_name not in requested_variables:
