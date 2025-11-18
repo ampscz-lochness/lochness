@@ -160,20 +160,22 @@ def find_subfolders(
 
 def get_matching_subfolders(
     drive_id: str,
-    responses_folder: Dict,
-    form_name: str,
+    ms_folder_dict: Dict,
+    subdir_name: str,
     headers: Dict[str, str],
     timeout: int = 120,
+    relaxed_search: bool = False
 ) -> List[Dict]:
     """
     Get subfolders matching a specific form name within the 'Responses' folder.
 
     Args:
         drive_id (str): The SharePoint drive ID.
-        responses_folder (Dict): The 'Responses' folder item.
-        form_name (str): The name of the form to match subfolders.
+        ms_folder_dict (Dict): The Sharepoint folder item.
+        subdir_name (str): The name of the form to match subfolders.
         headers (Dict[str, str]): Headers containing the access token.
         timeout (int): Request timeout in seconds.
+        relaxed_search (bool): Find patterns that include the subdir_name instead of exact match.
 
     Returns:
         List[Dict]: A list of matching subfolders.
@@ -181,20 +183,32 @@ def get_matching_subfolders(
     Raises:
         RuntimeError: If the 'Responses' folder or matching form folder is not found.
     """
+    if relaxed_search:
+        subfolders = find_subfolders(
+            drive_id, ms_folder_dict["id"], subdir_name,
+            headers,
+            timeout=timeout
+        )
+        if not subfolders:
+            logger.info(f"No subfolders found in '{subdir_name}'.")
+        else:
+            logger.info(f"Found {len(subfolders)} subfolders for form:'{subdir_name}'.")
+        return subfolders
+
     matching_folder = find_subfolder(
-        drive_id, responses_folder["id"], form_name, headers, timeout=timeout
+        drive_id, ms_folder_dict["id"], subdir_name, headers, timeout=timeout
     )
 
     if not matching_folder:
-        raise RuntimeError(f"'{form_name}' folder not found inside 'Responses'.")
+        raise RuntimeError(f"'{subdir_name}' folder not found inside {ms_folder_dict['name']}.")
 
     subfolders = sharepoint_api.list_folder_items(
         drive_id, matching_folder["id"], headers, timeout=timeout
     )
     if not subfolders:
-        logger.info(f"No subfolders found in '{form_name}'.")
+        logger.info(f"No subfolders found in '{subdir_name}'.")
     else:
-        logger.info(f"Found {len(subfolders)} subfolders for form:'{form_name}'.")
+        logger.info(f"Found {len(subfolders)} subfolders for form:'{subdir_name}'.")
 
     return subfolders
 
