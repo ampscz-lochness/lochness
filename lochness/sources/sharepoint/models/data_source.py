@@ -81,6 +81,7 @@ class SharepointDataSource(BaseModel):
                     site_url=row["data_source_metadata"]["site_url"],
                     form_name=row["data_source_metadata"]["form_name"],
                     modality=row["data_source_metadata"]["modality"],
+                    drive_name=row["data_source_metadata"]["drive_name"],
                 ),
             )
             return sharepoint_data_source
