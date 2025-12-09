@@ -68,6 +68,7 @@ def fetch_subject_data(
 
     metadata = sharepoint_data_source.data_source_metadata
     form_name = metadata.form_name
+    form_title = metadata.form_title
     modality = getattr(metadata, "modality", "unknown")
 
     identifier = f"{project_id}::{site_id}::{data_source_name}::{subject_id}"
@@ -96,21 +97,26 @@ def fetch_subject_data(
     sharepoint_site_id = sharepoint_api.get_site_id(headers, metadata.site_url)
 
     drives = sharepoint_api.get_drives(sharepoint_site_id, headers)
-    team_forms_drive = sharepoint_utils.find_drive_by_name(drives, "Team Forms")
-    if not team_forms_drive:
-        raise RuntimeError("Team Forms drive not found.")
-    drive_id = team_forms_drive["id"]
-
-    responses_folder = sharepoint_utils.find_folder_in_drive(
-        drive_id, "Responses", headers
-    )
-    if not responses_folder:
-        raise RuntimeError("Responses folder not found in Team Forms drive.")
+    data_drive = sharepoint_utils.find_drive_by_name(drives, metadata.drive_name)
+    if not data_drive:
+        raise RuntimeError(f"`{metadata.drive_name}` drive not found.")
+    drive_id = data_drive["id"]
 
     # Build output path
     project_name_cap = (
         project_id[:1].upper() + project_id[1:].lower() if project_id else project_id
     )
+
+    project_folder = sharepoint_utils.find_folder_in_drive(
+        drive_id, project_name_cap, headers
+    )
+    if not project_folder:
+        raise RuntimeError(f"Project folder `{project_name_cap}` not found in `{metadata.drive_name}` drive.")
+
+    site_folder = sharepoint_utils.find_subfolder(
+        drive_id, project_folder['id'], f"{project_name_cap}{site_id}", headers)
+    if not site_folder:
+        raise RuntimeError(f"Site folder {project_name_cap}{site_id} not found in `{project_name_cap}` folder.")
 
     lochness_root: str = config.parse(config_file, "general")["lochness_root"]  # type: ignore
     output_dir = (
@@ -123,23 +129,31 @@ def fetch_subject_data(
         / subject_id
         / modality
     )
-    subfolders = sharepoint_utils.get_matching_subfolders(
-        drive_id, responses_folder, form_name, headers
-    )
 
-    for subfolder in subfolders:
-        sharepoint_utils.download_new_or_updated_files(
-            subfolder,
-            drive_id,
-            headers,
-            form_name,
-            subject_id,
-            site_id,
-            project_id,
-            data_source_name,
-            output_dir,
-            config_file=config_file,
-        )
+    subject_folders = sharepoint_utils.get_matching_subfolders(
+        drive_id, site_folder, form_name, headers
+    )
+    
+    for subject_folder in subject_folders:
+        if subject_folder['name'] == subject_id:
+            logger.info(f"Found corresponding subfolder for {subject_id}")
+            session_folders = sharepoint_utils.get_matching_subfolders(
+                drive_id, subject_folder, subject_id, headers,
+                relaxed_search=True
+            )
+            for session_folder in session_folders:
+                sharepoint_utils.download_new_or_updated_files(
+                    session_folder,
+                    drive_id,
+                    headers,
+                    form_title,
+                    subject_id,
+                    site_id,
+                    project_id,
+                    data_source_name,
+                    output_dir,
+                    config_file=config_file,
+                )
 
 
 def pull_all_data(

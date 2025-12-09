@@ -30,6 +30,7 @@ from rich.logging import RichHandler
 from lochness.helpers import logs, utils, db, config
 from lochness.models.projects import Project
 from lochness.models.sites import Site
+from lochness.models.subjects import Subject
 from lochness.models.data_source import DataSource
 from lochness.models.data_sinks import DataSink
 from lochness.models.keystore import KeyStore
@@ -74,6 +75,10 @@ def import_setup_json(setup_json: Path, config_file: Path) -> None:
     for site_data in setup_data.get("sites", []):
         site = Site(**site_data)
         queries.append(site.to_sql_query())
+
+    for subject_data in setup_data.get("subjects", []):
+        subject = Subject(**subject_data)
+        queries.append(subject.to_sql_query())
 
     for ds_data in setup_data.get("data_sources", []):
         data_source = DataSource(**ds_data)
