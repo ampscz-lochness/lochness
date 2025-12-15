@@ -2,12 +2,14 @@
 Data Source Model
 """
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
 from lochness.helpers import db
+from lochness.helpers.db import get_db_connection
 
 
 class RedcapDataSourceMetadata(BaseModel):
@@ -22,6 +24,7 @@ class RedcapDataSourceMetadata(BaseModel):
     subject_id_variable: Optional[str]
     subject_id_variable_as_the_pk: bool = True
     messy_subject_id: bool = False
+    dictionary: Optional[Dict] = None
 
 
 class RedcapDataSource(BaseModel):
@@ -106,3 +109,41 @@ class RedcapDataSource(BaseModel):
             redcap_data_sources.append(redcap_data_source)
 
         return redcap_data_sources
+
+    @staticmethod
+    def update_data_source_metadata_dictionary(
+        config_file: Path,
+        project_id: str,
+        site_id: str,
+        dictionary: Dict[str, Any],
+    ) -> None:
+        """
+        Update the REDCap metadata history for a specific project and site.
+
+        Args:
+            config_file (Path): The path to the configuration file.
+            project_id (str): The project ID.
+            site_id (str): The site ID.
+            dictionary (Dict): The REDCap dictionary to update.
+        """
+        path = "{dictionary}"
+        value_json = json.dumps(dictionary)
+
+        value_json = value_json.replace("'", "''")
+
+        sql_query = f"""
+        UPDATE data_sources
+        SET data_source_metadata = jsonb_set(
+            data_source_metadata,
+            '{path}',
+            '{value_json}'::jsonb
+        )
+        WHERE project_id = '{project_id}'
+          AND site_id = '{site_id}'
+          AND data_source_type = 'redcap'
+        """
+
+        engine = get_db_connection(config_file=config_file)
+        with engine.begin() as conn:
+            cur = conn.connection.cursor()
+            cur.execute(sql_query)
