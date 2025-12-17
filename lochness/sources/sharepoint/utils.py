@@ -278,6 +278,7 @@ def should_download_file(local_file_path: Path, quick_xor_hash: Optional[str]) -
 
 def extract_info(
     json_path: Path,
+    date_str: str,
 ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
     """
     Extract ampsczSubjectId and formTitle from a response.submitted.json file.
@@ -308,7 +309,9 @@ def extract_info(
         pass
 
     try:
-        date_str = data.get("data", {}).get("data", {}).get("dateOfEeg")
+        # date_str = data.get("data", {}).get("data", {}).get("dateOfEeg")
+        # date_str = data.get("data", {}).get("data", {}).get("dateOfAudio")
+        date_str = data.get("data", {}).get("data", {}).get(date_str)
         dt = datetime.fromisoformat(date_str)
         # date_only = dt.date()
         dt_str = dt.strftime("%Y_%m_%d")
@@ -360,6 +363,7 @@ def download_subdirectory(
 
     # Download all other files
     for f in files:
+        logger.debug(f"file: {f}")
         if "file" not in f:
             continue
 
@@ -458,6 +462,8 @@ def is_response_json_updated(
     subfolder_name: str,
     subject_id: str,
     form_name: str,
+    date_str: str,
+    potential_file_uploads_without_form_update: bool,
     output_dir: Path,
 ) -> Optional[Path]:
     """
@@ -481,7 +487,9 @@ def is_response_json_updated(
             return None
 
         download_file(download_url, temp_file_path)
-        form_subject_id, form_title, dt_str, timestamp = extract_info(temp_file_path)
+
+        form_subject_id, form_title, dt_str, timestamp = extract_info(
+                temp_file_path, date_str)
 
         if form_subject_id != subject_id:
             logger.info(
@@ -512,11 +520,14 @@ def is_response_json_updated(
             )
 
         output_dir = output_dir / dt_str
+        if potential_file_uploads_without_form_update:
+            return output_dir
 
         response_json_local = output_dir / "response.submitted.json"
         timestamp_pre = None
         if response_json_local.is_file():
-            _, _, _, timestamp_pre = extract_info(response_json_local)
+            _, _, _, timestamp_pre = extract_info(response_json_local,
+                                                  date_str)
             logger.debug("Response json exists: %s", timestamp_pre)
         else:
             logger.debug(
@@ -544,11 +555,13 @@ def download_new_or_updated_files(
     drive_id: str,
     headers: Dict[str, str],
     form_name: str,
+    date_str: str,
     subject_id: str,
     site_id: str,
     project_id: str,
     data_source_name: str,
     output_dir_root: Path,
+    potential_file_uploads_without_form_update: bool,
     config_file: Path,
 ) -> None:
     """
@@ -588,7 +601,9 @@ def download_new_or_updated_files(
 
     # reponse needs to be downloaded each time as it does not have checksum
     output_dir = is_response_json_updated(
-        response_json_file, subfolder_name, subject_id, form_name, output_dir_root
+        response_json_file, subfolder_name, subject_id,
+        form_name, date_str, potential_file_uploads_without_form_update,
+        output_dir_root
     )
 
     if output_dir:

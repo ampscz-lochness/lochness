@@ -70,6 +70,9 @@ def fetch_subject_data(
     form_name = metadata.form_name
     form_title = metadata.form_title
     modality = getattr(metadata, "modality", "unknown")
+    date_str = getattr(metadata, "date_str", "unknown")
+    potential_file_uploads_without_form_update = getattr(
+            metadata, "potential_file_uploads_without_form_update", False)
 
     identifier = f"{project_id}::{site_id}::{data_source_name}::{subject_id}"
     logger.debug("Fetching data for %s", identifier)
@@ -147,11 +150,13 @@ def fetch_subject_data(
                     drive_id,
                     headers,
                     form_title,
+                    date_str,
                     subject_id,
                     site_id,
                     project_id,
                     data_source_name,
                     output_dir,
+                    potential_file_uploads_without_form_update,
                     config_file=config_file,
                 )
 
@@ -161,6 +166,7 @@ def pull_all_data(
     project_id: Optional[str] = None,
     site_id: Optional[str] = None,
     subject_id_list: Optional[List[str]] = None,
+    source_id: Optional[str] = None,
 ):
     """
     Main function to pull data for all SharePoint data sources and subjects.
@@ -188,6 +194,10 @@ def pull_all_data(
     if site_id:
         active_sharepoint_data_sources = [
             ds for ds in active_sharepoint_data_sources if ds.site_id == site_id
+        ]
+    if source_id:
+        active_sharepoint_data_sources = [
+            ds for ds in active_sharepoint_data_sources if ds.data_source_name == source_id
         ]
 
     if not active_sharepoint_data_sources:
@@ -303,6 +313,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--site_id", type=str, default=None, help="Site ID to pull data for (optional)"
     )
+    parser.add_argument(
+        "--source_id", type=str, default=None, help="Sharepoint source ID to pull data for (optional)"
+    )
     args = parser.parse_args()
 
     config_file = utils.get_config_file_path()
@@ -332,6 +345,7 @@ if __name__ == "__main__":
         config_file=config_file,
         project_id=args.project_id,
         site_id=args.site_id,
+        source_id=args.source_id,
     )
 
     logger.info("Finished SharePoint data pull.")
