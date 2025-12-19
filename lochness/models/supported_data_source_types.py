@@ -92,6 +92,17 @@ SUPPORTED_DATA_SOURCE_TYPES: List[SupportedDataSourceTypes] = [
             "form_name": "Name of the Teams Form",
         },
     ),
+    SupportedDataSourceTypes(
+        data_source_type="webdav",
+        data_source_metadata_dict={
+            "keystore_name": "Name of the keystore entry containing the credentials",
+            "endpoint_url": "WebDAV endpoint URL",
+            "match_prefix": "Prefix to match files",
+            "match_postfix": "Postfix to match files",
+            "file_datastructure": "Data structure of the files (e.g. 'multi-subject')",
+            "modality": "Modality of the data (e.g., 'cantab')",
+        },
+    ),
 ]
 
 

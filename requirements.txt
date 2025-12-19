@@ -11,3 +11,4 @@ LAMP-core
 msal
 azure-storage-blob
 azure-identity
+webdav4
