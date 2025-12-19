@@ -2,7 +2,9 @@
 Site Model
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List
+from pathlib import Path
+
 from pydantic import BaseModel
 
 from lochness.helpers import db
@@ -81,9 +83,52 @@ class Site(BaseModel):
 
         return sql_query
 
+    @staticmethod
+    def fetch_all(
+        config_file: Path,
+        project_id: str,
+        active_only: bool = True,
+    ) -> List["Site"]:
+        """
+        Fetch all sites from the database, optionally filtering by project_id and active status.
+
+        Args:
+            config_file (Path): Path to the configuration file.
+            project_id (str): Project ID to filter sites.
+            active_only (bool): If True, only fetch active sites.
+
+        Returns:
+            List[Site]: List of Site objects.
+        """
+        query = f"SELECT * FROM sites WHERE project_id = '{project_id}'"
+        if active_only:
+            query += " AND site_is_active = TRUE"
+
+        records_df = db.execute_sql(
+            config_file=config_file,
+            query=query,
+        )
+
+        sites: List["Site"] = []
+        for _, row in records_df.iterrows():
+            site = Site(
+                site_id=str(row["site_id"]),
+                site_name=str(row["site_name"]),
+                project_id=str(row["project_id"]),
+                site_is_active=bool(row["site_is_active"]),
+                site_metadata=dict(row["site_metadata"]),
+            )
+            sites.append(site)
+
+        return sites
+
     def delete_record_query(self) -> str:
-        """Generate a query to delete a record from the table"""
-        query = f"""DELETE FROM sites
+        """
+        Generate a query to delete a record from the table
+        """
+        query = f"""
+        DELETE FROM sites
         WHERE site_id = '{self.site_id}'
-          AND project_id = '{self.project_id}';"""
+        AND project_id = '{self.project_id}';
+        """
         return query

@@ -283,7 +283,7 @@ def insert_metadata(
     """
     subjects: List[Subject] = []
 
-    for idx, row in df.iterrows():  # type: ignore
+    for _, row in df.iterrows():  # type: ignore
         subject_id = row["subject_id"]
 
         subject_metadata: Dict[str, Any] = cast(
@@ -473,10 +473,18 @@ if __name__ == "__main__":
         description="Refresh REDCap metadata for all or specific project/site."
     )
     parser.add_argument(
-        "--project_id", type=str, default=None, help="Project ID to refresh (optional)"
+        "--project_id",
+        "-p",
+        type=str,
+        default=None,
+        help="Project ID to refresh (optional)",
     )
     parser.add_argument(
-        "--site_id", type=str, default=None, help="Site ID to refresh (optional)"
+        "--site_id",
+        "-s",
+        type=str,
+        default=None,
+        help="Site ID to refresh (optional)",
     )
     args = parser.parse_args()
 

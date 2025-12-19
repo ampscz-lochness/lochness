@@ -1,0 +1,3 @@
+[submodule "ClusterQueue"]
+	path = ClusterQueue
+	url = https://github.com/dheshanm/ClusterQueue.git

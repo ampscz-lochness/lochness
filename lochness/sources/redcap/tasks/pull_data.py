@@ -248,9 +248,7 @@ def fetch_subject_data(
                 site_id=site_id,
                 data_source_name=data_source_name,
                 subject_id=subject_id,
-                extra={
-                    "filter_logic": filter_logic
-                }
+                extra={"filter_logic": filter_logic},
             )
 
             logger.warning(f"No data found for {identifier}")
@@ -343,7 +341,10 @@ def save_subject_data(
             site_id=site_id,
             data_source_name=data_source_name,
             subject_id=subject_id,
-            extra={"file_path": str(file_path), "file_md5": file_md5 if file_md5 else None},
+            extra={
+                "file_path": str(file_path),
+                "file_md5": file_md5 if file_md5 else None,
+            },
         )
         return file_path, file_md5 if file_md5 else ""
     except Exception as e:  # pylint: disable=broad-except
@@ -529,12 +530,28 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--project_id",
+        "-p",
         type=str,
         default=None,
         help="Project ID to pull data for (optional)",
     )
     parser.add_argument(
-        "--site_id", type=str, default=None, help="Site ID to pull data for (optional)"
+        "--site_id",
+        "-s",
+        type=str,
+        default=None,
+        help="Site ID to pull data for (optional)",
+    )
+    parser.add_argument(
+        "--subject_id_list",
+        "-l",
+        type=str,
+        nargs="+",
+        default=None,
+        help=(
+            "List of subject IDs to pull data for (optional), "
+            "e.g. --subject_id_list sub001 sub002 sub003"
+        ),
     )
     args = parser.parse_args()
 
@@ -548,11 +565,25 @@ if __name__ == "__main__":
         config_file=config_file, module_name=MODULE_NAME, logger=logger
     )
 
+    project_id: Optional[str] = args.project_id
+    site_id: Optional[str] = args.site_id
+    subject_id_list: Optional[List[str]] = args.subject_id_list
+
+    logger.info(  # pylint: disable=logging-not-lazy
+        "Pulling REDCap data for project_id="
+        + str(project_id)
+        + ", site_id="
+        + str(site_id)
+        + ", subject_id_list="
+        + str(subject_id_list)
+    )
+
     logger.info("Starting REDCap data pull...")
     pull_all_data(
         config_file=config_file,
-        project_id=args.project_id,
-        site_id=args.site_id,
+        project_id=project_id,
+        site_id=site_id,
+        subject_id_list=subject_id_list,
     )
 
     logger.info("Finished REDCap data pull.")

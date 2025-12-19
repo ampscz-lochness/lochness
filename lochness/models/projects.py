@@ -2,7 +2,9 @@
 Projects are a collection of Studies
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List
+from pathlib import Path
+
 from pydantic import BaseModel
 
 from lochness.helpers import db
@@ -80,8 +82,47 @@ class Project(BaseModel):
 
         return sql_query
 
+    @staticmethod
+    def fetch_all(
+        config_file: Path,
+        active_only: bool = True,
+    ) -> List["Project"]:
+        """
+        Generate a query to fetch all records from the table
+
+        Args:
+            config_file (Path): Path to the configuration
+            active_only (bool): If True, fetch only active projects. Defaults to True.
+
+        Returns:
+            str: SQL query string
+        """
+        query = "SELECT * FROM projects"
+        if active_only:
+            query += " WHERE project_is_active = TRUE"
+        query += ";"
+
+        records_df = db.execute_sql(
+            config_file=config_file,
+            query=query,
+        )
+
+        projects: List["Project"] = []
+        for _, row in records_df.iterrows():
+            project = Project(
+                project_id=str(row["project_id"]),
+                project_name=str(row["project_name"]),
+                project_is_active=bool(row["project_is_active"]),
+                project_metadata=dict(row["project_metadata"]),
+            )
+            projects.append(project)
+
+        return projects
+
     def delete_record_query(self) -> str:
         """Generate a query to delete a record from the table"""
-        query = f"""DELETE FROM projects
-        WHERE project_id = '{self.project_id}';"""
+        query = f"""
+        DELETE FROM projects
+        WHERE project_id = '{self.project_id}';
+        """
         return query
