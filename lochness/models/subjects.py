@@ -4,6 +4,7 @@ Subject Model
 
 import json
 from pathlib import Path
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
@@ -291,3 +292,35 @@ class Subject(BaseModel):
         WHERE subject_id = '{self.subject_id}';
         """
         return query
+    
+    @staticmethod
+    def get_subject_consent_date(
+        project_id: str, site_id: str, subject_id: str, config_file: Path
+    ) -> Optional[datetime]:
+        """
+        Retrieves a subject's consent date from the database.
+
+        Args:
+            project_id (str): The project ID.
+            site_id (str): The site ID.
+            subject_id (str): The subject ID.
+            config_file (Path): Path to the configuration file.
+        Returns:
+            Optional[datetime]: The consent date if available, else None.
+        """
+        query = f"""
+        SELECT subject_metadata->'consent_date' AS consent_date
+        FROM subjects
+        WHERE project_id = '{project_id}' AND
+            site_id = '{site_id}' AND
+            subject_id = '{subject_id}';
+        """
+        result = db.fetch_record(config_file, query)
+
+        if result is None:
+            return None
+
+        consent_date_str: str = result
+        if consent_date_str:
+            return datetime.fromisoformat(consent_date_str)
+        return None

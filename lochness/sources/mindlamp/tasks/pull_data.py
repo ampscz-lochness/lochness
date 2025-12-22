@@ -25,7 +25,7 @@ except ValueError:
 import argparse
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pytz
 from rich.logging import RichHandler
@@ -108,6 +108,7 @@ def pull_all_data(
     force_end_date: Optional[datetime],
     project_id: Optional[str] = None,
     site_id: Optional[str] = None,
+    subject_id_list: Optional[List[str]] = None,
 ):
     """
     Main function to pull data for all active MindLAMP data sources and subjects.
@@ -175,6 +176,11 @@ def pull_all_data(
             site_id=mindlamp_data_source.site_id,
             config_file=config_file,
         )
+
+        if subject_id_list:
+            subjects_in_db = [
+                x for x in subjects_in_db if x.subject_id in subject_id_list
+            ]
 
         if not subjects_in_db:
             logger.info(
@@ -319,6 +325,17 @@ if __name__ == "__main__":
         type=str,
         help="End date for force redownload (YYYY-MM-DD)",
         default=None,
+    )
+    parser.add_argument(
+        "--subject_id_list",
+        "-l",
+        type=str,
+        nargs="+",
+        default=None,
+        help=(
+            "List of subject IDs to pull data for (optional), "
+            "e.g. --subject_id_list sub001 sub002 sub003"
+        ),
     )
     args = parser.parse_args()
 
