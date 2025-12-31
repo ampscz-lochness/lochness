@@ -124,8 +124,8 @@ echo "=================================="''',
             "{{ var.value['LOCHNESS_PYTHON_PATH'] }} "
             "{{ var.value['LOCHNESS_REPO_ROOT'] }}/lochness/sources/cantab/tasks/"
             "sync.py "
-            "{% if params.project_id %} --project_id {{ params.project_id }}{% endif %} "
-            "{% if params.site_id %} --site_id {{ params.site_id }}{% endif %}"
+            "{% if params.project_id %} --project-id {{ params.project_id }}{% endif %} "
+            "{% if params.site_id %} --site-id {{ params.site_id }}{% endif %}"
         ),
         cwd="{{ var.value['LOCHNESS_REPO_ROOT'] }}",
     )
@@ -137,8 +137,8 @@ echo "=================================="''',
             "{{ var.value['LOCHNESS_PYTHON_PATH'] }} "
             "{{ var.value['LOCHNESS_REPO_ROOT'] }}/lochness/sources/cantab/tasks/"
             "pull_data.py "
-            "{% if params.project_id %} --project_id {{ params.project_id }}{% endif %} "
-            "{% if params.site_id %} --site_id {{ params.site_id }}{% endif %}"
+            "{% if params.project_id %} --project-id {{ params.project_id }}{% endif %} "
+            "{% if params.site_id %} --site-id {{ params.site_id }}{% endif %}"
         ),
         cwd="{{ var.value['LOCHNESS_REPO_ROOT'] }}",
         outlets=[cantab_data_asset],

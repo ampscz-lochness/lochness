@@ -187,14 +187,14 @@ echo "=================================="''',
             "{{ var.value['LOCHNESS_PYTHON_PATH'] }} "
             "{{ var.value['LOCHNESS_REPO_ROOT'] }}/lochness/sources/mindlamp/tasks/"
             "pull_data.py "
-            "{% if params.project_id %} --project_id {{ params.project_id }}{% endif %} "
-            "{% if params.site_id %} --site_id {{ params.site_id }}{% endif %} "
-            "{% if params.start_date %} --start_date {{ params.start_date }}{% endif %} "
-            "{% if params.end_date %} --end_date {{ params.end_date }}{% endif %} "
-            "{% if params.force_start_date %} --force_start_date {{ params.force_start_date }}{% endif %} "
-            "{% if params.force_end_date %} --force_end_date {{ params.force_end_date }}{% endif %} "
-            "{% if params.days_to_pull %} --days_to_pull {{ params.days_to_pull }}{% endif %} "
-            "{% if params.days_to_redownload %} --days_to_redownload {{ params.days_to_redownload }}{% endif %}"
+            "{% if params.project_id %} --project-id {{ params.project_id }}{% endif %} "
+            "{% if params.site_id %} --site-id {{ params.site_id }}{% endif %} "
+            "{% if params.start_date %} --start-date {{ params.start_date }}{% endif %} "
+            "{% if params.end_date %} --end-date {{ params.end_date }}{% endif %} "
+            "{% if params.force_start_date %} --force-start-date {{ params.force_start_date }}{% endif %} "
+            "{% if params.force_end_date %} --force-end-date {{ params.force_end_date }}{% endif %} "
+            "{% if params.days_to_pull %} --days-to-pull {{ params.days_to_pull }}{% endif %} "
+            "{% if params.days_to_redownload %} --days-to-redownload {{ params.days_to_redownload }}{% endif %}"
         ),
         cwd="{{ var.value['LOCHNESS_REPO_ROOT'] }}",
         outlets=[mindlamp_data_asset],
