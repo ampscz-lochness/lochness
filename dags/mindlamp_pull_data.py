@@ -63,7 +63,7 @@ with DAG(
     params=ParamsDict(
         {
             "project_id": Param(
-                default="",
+                default=None,
                 type=["null", "string"],
                 description=(
                     "Optional: Limit data pull to a specific project ID. "
@@ -72,7 +72,7 @@ with DAG(
                 title="Project ID",
             ),
             "site_id": Param(
-                default="",
+                default=None,
                 type=["null", "string"],
                 description=(
                     "Optional: Limit data pull to a specific site ID. "
@@ -81,7 +81,7 @@ with DAG(
                 title="Site ID",
             ),
             "start_date": Param(
-                default="",
+                default=None,
                 type=["null", "string"],
                 format="date",
                 description=(
@@ -92,7 +92,7 @@ with DAG(
                 title="Start Date",
             ),
             "end_date": Param(
-                default="",
+                default=None,
                 type=["null", "string"],
                 format="date",
                 description=(
@@ -103,7 +103,7 @@ with DAG(
                 title="End Date",
             ),
             "force_start_date": Param(
-                default="",
+                default=None,
                 type=["null", "string"],
                 format="date",
                 description=(
@@ -113,7 +113,7 @@ with DAG(
                 title="Force Redownload Start Date",
             ),
             "force_end_date": Param(
-                default="",
+                default=None,
                 type=["null", "string"],
                 format="date",
                 description=(

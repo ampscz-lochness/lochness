@@ -59,7 +59,7 @@ with DAG(
     params=ParamsDict(
         {
             "project_id": Param(
-                default="",
+                default=None,
                 type=["null", "string"],
                 description=(
                     "Optional: Limit data pull to a specific project ID. "
@@ -68,7 +68,7 @@ with DAG(
                 title="Project ID",
             ),
             "site_id": Param(
-                default="",
+                default=None,
                 type=["null", "string"],
                 description=(
                     "Optional: Limit data pull to a specific site ID. "
@@ -77,7 +77,7 @@ with DAG(
                 title="Site ID",
             ),
             "source_id": Param(
-                default="",
+                default=None,
                 type=["null", "string"],
                 description=(
                     "Optional: Limit data pull to a specific SharePoint data source ID. "

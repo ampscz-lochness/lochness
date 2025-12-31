@@ -60,7 +60,7 @@ with DAG(
     params=ParamsDict(
         {
             "project_id": Param(
-                default="",
+                default=None,
                 type=["null", "string"],
                 description=(
                     "Optional: Limit workflow to a specific project ID. "
@@ -69,7 +69,7 @@ with DAG(
                 title="Project ID",
             ),
             "site_id": Param(
-                default="",
+                default=None,
                 type=["null", "string"],
                 description=(
                     "Optional: Limit workflow to a specific site ID. "
