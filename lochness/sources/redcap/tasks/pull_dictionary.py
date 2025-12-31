@@ -27,13 +27,12 @@ except ValueError:
     pass
 
 import logging
-from typing import Any, Dict, List, Optional, cast, Set
+from typing import Any, Dict, Optional
 
-import pandas as pd
 import requests
 from rich.logging import RichHandler
 
-from lochness.helpers import logs, utils, db
+from lochness.helpers import logs, utils
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
 from lochness.sources.redcap.models.data_source import RedcapDataSource
@@ -106,7 +105,7 @@ def fetch_dictionary(
     redcap_data_source: RedcapDataSource,
     config_file: Path,
     timeout_s: int = 30,
-) -> Optional[pd.DataFrame]:
+) -> None:
     """
     Refreshes the data dictionary for a given REDCap data source.
 
@@ -182,7 +181,7 @@ def fetch_dictionary(
             config_file=config_file,
             project_id=project_id,
             site_id=site_id,
-            dictionary=raw_data
+            dictionary=raw_data,
         )
     else:
         if redcap_data_source.data_source_metadata.dictionary == raw_data:
@@ -205,10 +204,10 @@ def fetch_dictionary(
             config_file=config_file,
             project_id=project_id,
             site_id=site_id,
-            dictionary=raw_data
+            dictionary=raw_data,
         )
 
-    return 1
+    return None
 
 
 def refresh_redcap_dictionary(
@@ -292,6 +291,7 @@ def refresh_redcap_dictionary(
             redcap_data_source=redcap_data_source,
             config_file=config_file,
         )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
