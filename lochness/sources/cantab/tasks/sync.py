@@ -188,7 +188,7 @@ def link_cantab_subject_id(
     if not active_cantab_data_sources:
         logger.warning("No active CANTAB data sources found.")
         Logs(
-            log_level="WARNING",
+            log_level="WARN",
             log_message={
                 "event": "link_cantab_subject_id_no_data_sources",
                 "message": "No active CANTAB data sources found",
