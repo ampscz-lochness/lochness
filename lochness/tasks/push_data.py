@@ -135,7 +135,10 @@ def push_file_to_sink(
                 push_metadata={},
             )
             db.execute_queries(
-                config_file, [data_push.to_sql_query()], show_commands=False, silent=True
+                config_file,
+                [data_push.to_sql_query()],
+                show_commands=False,
+                silent=True,
             )
 
             Logs(
@@ -186,13 +189,17 @@ def push_file_to_sink(
 
     # except Exception as e:  # pylint: disable=broad-except
     #     logger.error(
-    #         f"Error pushing file {file_obj.file_name} to {data_sink.data_sink_name}: {e}"
+    #         f"Error pushing file {file_obj.file_name} to "
+    #         f"{data_sink.data_sink_name}: {e}"
     #     )
     #     Logs(
     #         log_level="ERROR",
     #         log_message={
     #             "event": "data_push_exception",
-    #             "message": f"Exception during push of {file_obj.file_name} to {data_sink.data_sink_name}.",
+    #             "message": (
+    #                 f"Exception during push of {file_obj.file_name} to "
+    #                 f"{data_sink.data_sink_name}."
+    #             ),
     #             "file_path": str(file_obj.file_path),
     #             "data_sink_name": data_sink.data_sink_name,
     #             "error": str(e),
@@ -230,7 +237,8 @@ def simple_push_file_to_sink(file_path: Path):
 
     if data_pull is None:
         raise ValueError(
-            f"No data pull associated with file {file_obj.file_name} (md5={file_obj.md5})."
+            f"No data pull associated with file {file_obj.file_name} "
+            f"(md5={file_obj.md5})."
         )
 
     data_sink = DataSink.get_matching_data_sink(
@@ -297,8 +305,11 @@ def get_matching_data_sink_list(
         ).insert(config_file)
         return []
 
+    project_id_display = project_id or "ALL"
+    site_id_display = site_id or "ALL"
     logger.info(
-        f"Found {len(active_data_sinks)} active data sinks for {project_id}::{site_id}."
+        f"Found {len(active_data_sinks)} active data sinks for "
+        f"{project_id_display}::{site_id_display}."
     )
     Logs(
         log_level="INFO",
@@ -314,14 +325,20 @@ def get_matching_data_sink_list(
     return active_data_sinks
 
 
-def push_all_data(config_file: Path, project_id: Optional[str], site_id: Optional[str]) -> None:
+def push_all_data(
+    config_file: Path,
+    project_id: Optional[str],
+    site_id: Optional[str],
+) -> None:
     """
     Function to push data to all active data sinks.
 
     Args:
         config_file (Path): Path to the configuration file.
-        project_id (Optional[str]): Project ID to filter data sinks. If None, all projects are processed.
-        site_id (Optional[str]): Site ID to filter data sinks. If None, all sites are processed.
+        project_id (Optional[str]): Project ID to filter data sinks.
+            If None, all projects are processed.
+        site_id (Optional[str]): Site ID to filter data sinks.
+            If None, all sites are processed.
 
     Returns:
         None
@@ -342,11 +359,14 @@ def push_all_data(config_file: Path, project_id: Optional[str], site_id: Optiona
         return
 
     for active_data_sink in active_data_sinks:
-        data_sink_id: int = active_data_sink.get_data_sink_id(config_file)  # type: ignore
+        data_sink_id: int = active_data_sink.get_data_sink_id(  # type: ignore
+            config_file
+        )
 
         logger.debug(
             f"Processing data sink: {data_sink_id} "
-            f"(Project ID: {active_data_sink.project_id}, Site ID: {active_data_sink.site_id})"
+            f"(Project ID: {active_data_sink.project_id}, "
+            f"Site ID: {active_data_sink.site_id})"
         )
 
         files_to_push = File.get_files_to_push(
@@ -404,7 +424,10 @@ def push_all_data(config_file: Path, project_id: Optional[str], site_id: Optiona
                         log_level="WARNING",
                         log_message={
                             "event": "data_push_no_associated_data_pull",
-                            "message": f"No associated data pull found for file {file_obj.file_name}.",
+                            "message": (
+                                f"No associated data pull found for file "
+                                f"{file_obj.file_name}."
+                            ),
                             "file_path": str(file_obj.file_path),
                             "data_sink_name": data_sink.data_sink_name,
                             "project_id": project_id,
