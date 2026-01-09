@@ -256,7 +256,7 @@ class FilesystemSink(DataSinkI):
             "object_name": object_name,
             "destination_path": destination_path,
             "ssh_host": ssh_host if ssh_host else "local",
-            "is_remote": ssh_host is not None,
+            "is_remote": bool(ssh_host),
         }
 
         data_push = DataPush(
