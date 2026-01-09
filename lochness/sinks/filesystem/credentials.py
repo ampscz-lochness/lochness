@@ -21,6 +21,7 @@ def insert_filesystem_cred(
     ssh_user: Optional[str] = None,
     ssh_key_path: Optional[str] = None,
     ssh_port: int = 22,
+    remote_rsync_bin_path: Optional[str] = None,
 ) -> None:
     """
     Inserts or updates filesystem credentials in the KeyStore.
@@ -37,6 +38,7 @@ def insert_filesystem_cred(
         ssh_user (Optional[str]): The SSH username for remote destinations.
         ssh_key_path (Optional[str]): Path to the SSH private key file.
         ssh_port (int): The SSH port number. Defaults to 22.
+        remote_rsync_bin_path (Optional[str]): Path to rsync binary on remote system.
     """
     config_file = utils.get_config_file_path()
     encryption_passphrase = config.get_encryption_passphrase(config_file=config_file)
@@ -47,6 +49,7 @@ def insert_filesystem_cred(
         "ssh_user": ssh_user,
         "ssh_key_path": ssh_key_path,
         "ssh_port": ssh_port,
+        "remote_rsync_bin_path": remote_rsync_bin_path,
     }
 
     my_key = KeyStore(

@@ -1,6 +1,7 @@
 """
 Implementation of a data sink for local and remote filesystems using rsync.
 """
+
 import json
 import logging
 import shutil
@@ -49,6 +50,7 @@ class FilesystemSink(DataSinkI):
         destination: str,
         ssh_key_path: Optional[str] = None,
         ssh_port: int = 22,
+        remote_rsync_bin_path: Optional[str] = None,
     ) -> List[str]:
         """
         Builds the rsync command with appropriate options.
@@ -58,6 +60,7 @@ class FilesystemSink(DataSinkI):
             destination (str): The destination path (local or remote).
             ssh_key_path (Optional[str]): Path to SSH private key for remote.
             ssh_port (int): SSH port number for remote destinations.
+            remote_rsync_bin_path (Optional[str]): Path to rsync binary on remote system.
 
         Returns:
             List[str]: The rsync command as a list of arguments.
@@ -65,14 +68,21 @@ class FilesystemSink(DataSinkI):
         command = [
             "rsync",
             "-avz",  # archive, verbose, compress
+            "--mkpath",  # create destination path (rsync 3.2.3+)
             "--progress",
             "--partial",  # keep partially transferred files
             "--timeout=300",  # 5 minute timeout
         ]
 
+        # Add remote rsync path if specified
+        if remote_rsync_bin_path:
+            command.append(f"--rsync-path={remote_rsync_bin_path}")
+
         # Add SSH options if key path is provided
         if ssh_key_path:
-            ssh_options = f"-e 'ssh -i {ssh_key_path} -p {ssh_port} -o StrictHostKeyChecking=no'"
+            ssh_options = (
+                f"-e 'ssh -i {ssh_key_path} -p {ssh_port} -o StrictHostKeyChecking=no'"
+            )
             command.append(ssh_options)
         elif ssh_port != 22:
             ssh_options = f"-e 'ssh -p {ssh_port} -o StrictHostKeyChecking=no'"
@@ -151,9 +161,7 @@ class FilesystemSink(DataSinkI):
                 f"for sink {self.data_sink.data_sink_name}"
             )
             logger.debug(f"Data sink metadata: {filesystem_metadata}")
-            raise ValueError(
-                "Missing filesystem configuration in data sink metadata."
-            )
+            raise ValueError("Missing filesystem configuration in data sink metadata.")
 
         keystore_data = KeyStore.retrieve_keystore(
             key_name=keystore_name,
@@ -166,9 +174,7 @@ class FilesystemSink(DataSinkI):
                 f"Failed to retrieve keystore data for {keystore_name} "
                 f"in project {self.data_sink.project_id}"
             )
-            raise ValueError(
-                "Keystore data not found for the specified keystore name."
-            )
+            raise ValueError("Keystore data not found for the specified keystore name.")
 
         logger.debug(f"Retrieved keystore data for {keystore_name}")
 
@@ -178,6 +184,7 @@ class FilesystemSink(DataSinkI):
         ssh_user: Optional[str] = keystore_value.get("ssh_user")
         ssh_key_path: Optional[str] = keystore_value.get("ssh_key_path")
         ssh_port: int = keystore_value.get("ssh_port", 22)
+        remote_rsync_bin_path: Optional[str] = keystore_value.get("remote_rsync_bin_path")
 
         if not destination_path:
             logger.error(
@@ -220,6 +227,7 @@ class FilesystemSink(DataSinkI):
                     destination=full_destination,
                     ssh_key_path=ssh_key_path,
                     ssh_port=ssh_port,
+                    remote_rsync_bin_path=remote_rsync_bin_path,
                 )
                 self._execute_rsync(command)
 

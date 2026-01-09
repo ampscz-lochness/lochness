@@ -54,10 +54,21 @@ def main():
     project_id: str = filesystem_creds['project_id']  # type: ignore
 
     # Optional SSH parameters for remote destinations
-    ssh_host: Optional[str] = filesystem_creds.get('ssh_host')  # type: ignore
-    ssh_user: Optional[str] = filesystem_creds.get('ssh_user')  # type: ignore
-    ssh_key_path: Optional[str] = filesystem_creds.get('ssh_key_path')  # type: ignore
-    ssh_port: int = int(filesystem_creds.get('ssh_port', 22))  # type: ignore
+    ssh_host: Optional[str] = filesystem_creds.get(
+        'ssh_host'
+    )  # type: ignore
+    ssh_user: Optional[str] = filesystem_creds.get(
+        'ssh_user'
+    )  # type: ignore
+    ssh_key_path: Optional[str] = filesystem_creds.get(
+        'ssh_key_path'
+    )  # type: ignore
+    ssh_port: int = int(
+        filesystem_creds.get('ssh_port', 22)  # type: ignore
+    )
+    remote_rsync_bin_path: Optional[str] = filesystem_creds.get(
+        'remote_rsync_bin_path'
+    )  # type: ignore
 
     logger.info(
         f"Attempting to insert filesystem credentials with key_name "
@@ -72,6 +83,7 @@ def main():
             ssh_user=ssh_user,
             ssh_key_path=ssh_key_path,
             ssh_port=ssh_port,
+            remote_rsync_bin_path=remote_rsync_bin_path,
         )
         logger.info("Filesystem credentials inserted successfully.")
     except Exception as e:  # pylint: disable=broad-except
