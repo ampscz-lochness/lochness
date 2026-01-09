@@ -314,14 +314,14 @@ def get_matching_data_sink_list(
     return active_data_sinks
 
 
-def push_all_data(config_file: Path, project_id: str, site_id: str) -> None:
+def push_all_data(config_file: Path, project_id: Optional[str], site_id: Optional[str]) -> None:
     """
     Function to push data to all active data sinks.
 
     Args:
         config_file (Path): Path to the configuration file.
-        project_id (str): Project ID to filter data sinks.
-        site_id (str): Site ID to filter data sinks.
+        project_id (Optional[str]): Project ID to filter data sinks. If None, all projects are processed.
+        site_id (Optional[str]): Site ID to filter data sinks. If None, all sites are processed.
 
     Returns:
         None
@@ -351,8 +351,8 @@ def push_all_data(config_file: Path, project_id: str, site_id: str) -> None:
 
         files_to_push = File.get_files_to_push(
             config_file=config_file,
-            project_id=project_id,
-            site_id=site_id,
+            project_id=active_data_sink.project_id,
+            site_id=active_data_sink.site_id,
             data_sink_id=data_sink_id,
         )
         if not files_to_push:
@@ -435,8 +435,8 @@ def push_all_data(config_file: Path, project_id: str, site_id: str) -> None:
                     data_sink=data_sink,
                     data_source_name=associated_data_source_name,
                     modality=associated_modality,
-                    project_id=project_id,
-                    site_id=site_id,
+                    project_id=data_sink.project_id,
+                    site_id=data_sink.site_id,
                     subject_id=subject_id,
                     config_file=config_file,
                 )
@@ -462,15 +462,15 @@ if __name__ == "__main__":
         "--project_id",
         "-p",
         type=str,
-        required=True,
-        help="Project ID to push data for",
+        default=None,
+        help="Project ID to push data for (optional, defaults to all projects)",
     )
     parser.add_argument(
         "--site_id",
         "-s",
         type=str,
-        required=True,
-        help="Site ID to push data for",
+        default=None,
+        help="Site ID to push data for (optional, defaults to all sites)",
     )
     args = parser.parse_args()
 
@@ -486,10 +486,10 @@ if __name__ == "__main__":
     logger.info("Starting data push...")
     logger.debug(f"Using configuration file: {config_file}")
 
-    project_id: str = args.project_id
-    site_id: str = args.site_id
+    project_id: Optional[str] = args.project_id
+    site_id: Optional[str] = args.site_id
 
-    logger.debug(f"Project ID: {project_id}, Site ID: {site_id}")
+    logger.debug(f"Project ID: {project_id or 'ALL'}, Site ID: {site_id or 'ALL'}")
 
     push_all_data(config_file=config_file, project_id=project_id, site_id=site_id)
 
