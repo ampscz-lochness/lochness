@@ -72,7 +72,6 @@ def main(config_file: Path):
     )
     data_sink_metadata_for_insert = {
         "type": "filesystem",
-        "is_active": True,
         "keystore_name": keystore_name,
     }
     data_sink_obj = DataSink(
@@ -80,6 +79,7 @@ def main(config_file: Path):
         site_id=test_site_id,
         project_id=test_project_id,
         data_sink_metadata=data_sink_metadata_for_insert,
+        is_active=True,
     )
 
     db.execute_queries(

@@ -77,7 +77,6 @@ def main(config_file: Path):
     )
     data_sink_metadata_for_insert = {
         "type": "azure_blob",
-        "is_active": True,
         "container_name": azure_blob_container_name,
         "keystore_name": keystore_name,
     }
@@ -86,6 +85,7 @@ def main(config_file: Path):
         site_id=test_site_id,
         project_id=test_project_id,
         data_sink_metadata=data_sink_metadata_for_insert,
+        is_active=True,
     )
 
     db.execute_queries(
