@@ -72,7 +72,6 @@ def push_file_to_sink(
     Only pushes if the file (by path and md5) has not already been
     pushed to this sink.
     """
-    data_sink_id = data_sink.get_data_sink_id(config_file)
     sink_type = data_sink.data_sink_metadata.get("type")
     if not sink_type:
         msg = (
@@ -108,7 +107,7 @@ def push_file_to_sink(
             raise ModuleNotFoundError
 
         start_time = datetime.now()
-        success = data_sink_i.push(
+        data_push: DataPush = data_sink_i.push(
             file_to_push=file_obj.file_path,
             config_file=config_file,
             push_metadata={
@@ -124,16 +123,8 @@ def push_file_to_sink(
         end_time = datetime.now()
         push_time_s = int((end_time - start_time).total_seconds())
 
-        if success:
+        if data_push:
             # Record successful push in data_pushes table
-            data_push = DataPush(
-                file_path=str(file_obj.file_path),
-                file_md5=file_obj.md5,  # type: ignore
-                data_sink_id=data_sink_id,  # type: ignore
-                push_time_s=push_time_s,
-                push_timestamp=datetime.now().isoformat(),
-                push_metadata={},
-            )
             db.execute_queries(
                 config_file,
                 [data_push.to_sql_query()],

@@ -251,6 +251,14 @@ class FilesystemSink(DataSinkI):
             ).insert(config_file)
             raise
 
+        merged_push_metadata = {
+            **push_metadata,
+            "object_name": object_name,
+            "destination_path": destination_path,
+            "ssh_host": ssh_host,
+            "is_remote": ssh_host is not None,
+        }
+
         data_push = DataPush(
             data_sink_id=self.data_sink.get_data_sink_id(  # type: ignore
                 config_file=config_file
@@ -258,12 +266,7 @@ class FilesystemSink(DataSinkI):
             file_path=str(file_to_push),
             file_md5=hash_helper.compute_fingerprint(file_to_push),
             push_time_s=int(timer.duration) if timer.duration is not None else 0,
-            push_metadata={
-                "object_name": object_name,
-                "destination_path": destination_path,
-                "ssh_host": ssh_host,
-                "is_remote": ssh_host is not None,
-            },
+            push_metadata=merged_push_metadata,
             push_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
 
