@@ -255,7 +255,7 @@ class FilesystemSink(DataSinkI):
             **push_metadata,
             "object_name": object_name,
             "destination_path": destination_path,
-            "ssh_host": ssh_host,
+            "ssh_host": ssh_host if ssh_host else "local",
             "is_remote": ssh_host is not None,
         }
 
