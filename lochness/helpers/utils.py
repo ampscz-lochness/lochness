@@ -1,6 +1,8 @@
 """
 Helper functions for the pipeline
 """
+
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -19,6 +21,26 @@ import pandas as pd
 from lochness.helpers import cli
 
 _console = Console(color_system="standard")
+
+
+def is_running_in_airflow() -> bool:
+    """
+    Detect if the script is running in an Airflow context.
+
+    Checks for common Airflow environment variables that are set when
+    a task is executed by Airflow.
+
+    Returns:
+        bool: True if running in Airflow, False otherwise.
+    """
+    airflow_env_vars = [
+        "AIRFLOW_CTX_DAG_ID",
+        "AIRFLOW_CTX_TASK_ID",
+        "AIRFLOW_CTX_EXECUTION_DATE",
+        "AIRFLOW_CTX_DAG_RUN_ID",
+        "AIRFLOW_HOME",
+    ]
+    return any(var in os.environ for var in airflow_env_vars)
 
 
 def get_progress_bar(transient: bool = False) -> Progress:
