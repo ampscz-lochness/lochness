@@ -37,6 +37,7 @@ from lochness.models.logs import Logs
 from lochness.sinks.data_sink_i import DataSinkI
 from lochness.sinks.minio_object_store.minio_sink import MinioSink
 from lochness.sinks.azure_blob_storage.blob_sink import AzureBlobSink
+from lochness.sinks.filesystem.filesystem_sink import FilesystemSink
 
 MODULE_NAME = "lochness.tasks.push_data"
 
@@ -98,6 +99,9 @@ def push_file_to_sink(
             data_sink_i.data_sink = data_sink
         elif sink_type == "azure_blob":
             data_sink_i = AzureBlobSink(data_sink=data_sink)
+            data_sink_i.data_sink = data_sink
+        elif sink_type == "filesystem":
+            data_sink_i = FilesystemSink(data_sink=data_sink)
             data_sink_i.data_sink = data_sink
 
         if data_sink_i is None:
