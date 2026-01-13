@@ -7,26 +7,65 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from lochness.helpers import config
+from rich.logging import RichHandler
+
+from lochness.helpers import config, utils
 from lochness.logs.handlers import BatchedPostgresLogHandler
 
 logger = logging.getLogger(__name__)
 
 
 def configure_logging(
-    config_file: Path, module_name: str, logger: logging.Logger, use_db: bool = True
+    config_file: Path,
+    module_name: str,
+    logger: logging.Logger,
+    level: int = logging.DEBUG,
+    use_db: bool = True,
 ) -> None:
     """
     Configures logging for a given module using the specified configuration file.
 
+    Sets up both file logging (from config) and console logging with appropriate
+    handlers based on execution context:
+    - CLI context: Uses RichHandler for colorful, interactive output
+    - Airflow context: Uses standard StreamHandler for plain text logs
+
     Args:
-        config_file (str): The path to the configuration file.
+        config_file (Path): The path to the configuration file.
         module_name (str): The name of the module to configure logging for.
         logger (logging.Logger): The logger object to use for logging.
+        level (int): The logging level. Defaults to logging.DEBUG.
+        use_db (bool): Whether to use the database logging handler. Defaults to True.
 
     Returns:
         None
     """
+    # Set up console handler based on execution context
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+
+    # Remove existing handlers to avoid duplicates
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+
+    if utils.is_running_in_airflow():
+        # Airflow context: use standard logging format for easier parsing
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(level)
+        console_handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        root_logger.addHandler(console_handler)
+    else:
+        # CLI context: use Rich for colorful output
+        console_handler = RichHandler(rich_tracebacks=True)
+        console_handler.setLevel(level)
+        root_logger.addHandler(console_handler)
+
+    # Set up file logging from config
     log_params = config.parse(config_file, "logging")
     log_file_r: str = log_params[module_name]  # type: ignore
 
@@ -49,6 +88,9 @@ def configure_logging(
         archive_file.parent.mkdir(parents=True, exist_ok=True)
         log_file.rename(archive_file)
 
+    # Ensure log directory exists
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
     file_handler = logging.FileHandler(log_file, mode="a")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(
@@ -62,13 +104,13 @@ def configure_logging(
         )
     )
 
-    logging.getLogger().addHandler(file_handler)
+    root_logger.addHandler(file_handler)
     logger.info(f"Logging to {log_file}")
 
     if use_db:
         db_handler = BatchedPostgresLogHandler(config_file=config_file)
         db_handler.setLevel(logging.DEBUG)
-        logging.getLogger().addHandler(db_handler)
+        root_logger.addHandler(db_handler)
         logger.info("Logging to PostgreSQL database")
 
 

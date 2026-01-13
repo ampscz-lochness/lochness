@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Insert a DataSink for Azure Blob Storage into the database.
+Insert a DataSink for filesystem into the database.
 """
 import sys
 from pathlib import Path
@@ -43,41 +43,35 @@ logging.basicConfig(**logargs)
 
 def main(config_file: Path):
     """
-    Main function to insert a Azure Blob Storage DataSink.
+    Main function to insert a filesystem DataSink.
     """
 
-    azure_blob_creds = config.parse(
+    filesystem_creds = config.parse(
         config_file,
-        'azure-blob-datasink-test'
+        'filesystem-datasink-test'
     )
-    test_data_sink_name: str = azure_blob_creds[
+    test_data_sink_name: str = filesystem_creds[
         'test_data_sink_name'
     ]  # type: ignore
-    test_site_id: str = azure_blob_creds[
+    test_site_id: str = filesystem_creds[
         'test_site_id'
     ]  # type: ignore
-    test_project_id: str = azure_blob_creds[
+    test_project_id: str = filesystem_creds[
         'test_project_id'
     ]  # type: ignore
 
     # This must match the key_name used when
-    # inserting MinIO credentials
-    keystore_name: str = azure_blob_creds[
+    # inserting filesystem credentials
+    keystore_name: str = filesystem_creds[
         'keystore_name'
     ]  # type: ignore
 
-    # Azure Blob Storage specific metadata
-    azure_blob_container_name: str = azure_blob_creds[
-        'azure_blob_container_name'
-    ]  # type: ignore
-
     logger.info(
-        f"Ensuring Azure Blob Storage data sink "
+        f"Ensuring filesystem data sink "
         f"'{test_data_sink_name}' exists..."
     )
     data_sink_metadata_for_insert = {
-        "type": "azure_blob",
-        "container_name": azure_blob_container_name,
+        "type": "filesystem",
         "keystore_name": keystore_name,
     }
     data_sink_obj = DataSink(
@@ -94,7 +88,7 @@ def main(config_file: Path):
         show_commands=False
     )
     logger.info(
-        f"MinIO data sink "
+        f"Filesystem data sink "
         f"'{test_data_sink_name}' inserted."
     )
 
