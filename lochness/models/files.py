@@ -45,6 +45,7 @@ class File:
         else:
             self.md5 = None
 
+        self.file_metadata: Dict[str, Any] = {}
         self.internal_metadata: Dict[str, Any] = {}
 
     @staticmethod
@@ -53,6 +54,7 @@ class File:
         file_size_mb: float,
         m_time: datetime,
         md5: Optional[str] = None,
+        file_metadata: Optional[Dict[str, Any]] = None,
     ) -> "File":
         """
         Create a new File object from given parameters.
@@ -64,6 +66,7 @@ class File:
             file_path (Path): The path to the file.
             m_time (datetime): The modification time of the file.
             md5 (Optional[str]): The MD5 hash of the file.
+            file_metadata: Optional[Dict[str, Any]] = None,
 
         Returns:
             File: A new File object.
@@ -83,6 +86,8 @@ class File:
         file_obj.m_time = m_time
         file_obj.md5 = md5
         file_obj.internal_metadata = {}
+        file_obj.file_metadata = file_metadata if file_metadata else {}
+
         return file_obj
 
     def __str__(self):
@@ -111,6 +116,7 @@ class File:
             file_path TEXT NOT NULL,
             file_m_time TIMESTAMP NOT NULL,
             file_md5 TEXT NOT NULL,
+            file_metadata JSONB,
             PRIMARY KEY (file_path, file_md5)
         );
         """
@@ -134,14 +140,14 @@ class File:
         f_path = db.sanitize_string(str(file_path))
         sql_query = f"""
         SELECT DISTINCT files.*,
-          data_sources.data_source_metadata->>'modality' as modality
+            data_sources.data_source_metadata->>'modality' as modality
         FROM files
         JOIN data_pull on data_pull.file_path = files.file_path AND
-          data_pull.file_md5 = files.file_md5
+            data_pull.file_md5 = files.file_md5
         JOIN data_sources on
-          data_sources.data_source_name = data_pull.data_source_name
-          AND data_sources.site_id = data_pull.site_id
-          AND data_sources.project_id = data_pull.project_id
+            data_sources.data_source_name = data_pull.data_source_name
+            AND data_sources.site_id = data_pull.site_id
+            AND data_sources.project_id = data_pull.project_id
         WHERE files.file_path = '{f_path}'
         ORDER BY files.file_m_time DESC
         LIMIT 1;
@@ -169,6 +175,7 @@ class File:
             file_size_mb=row["file_size_mb"],
             m_time=row["file_m_time"],
             md5=row["file_md5"],
+            file_metadata=row["file_metadata"],
         )
 
         file_obj.internal_metadata = {"modality": row["modality"]}
@@ -281,8 +288,8 @@ class File:
             data_push.data_sink_id = {data_sink_id}
         )
         WHERE data_pull.project_id = '{project_id}'
-          AND data_pull.site_id = '{site_id}'
-          AND data_push.data_sink_id IS NULL;
+            AND data_pull.site_id = '{site_id}'
+            AND data_push.data_sink_id IS NULL;
         """
 
         db_df = db.execute_sql(
@@ -313,6 +320,6 @@ class File:
         DELETE
         FROM files
         WHERE file_path = '{self.file_path}'
-          AND file_md5 = '{self.md5}';
+            AND file_md5 = '{self.md5}';
         """
         return query
