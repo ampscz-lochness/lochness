@@ -396,64 +396,63 @@ def push_all_data(
         ).insert(config_file)
 
         for file_obj in files_to_push:
-            for data_sink in active_data_sinks:
-                logger.info(
-                    f"Attempting to push {file_obj.file_name} to "
-                    f"{data_sink.data_sink_name}..."
+            logger.info(
+                f"Attempting to push {file_obj.file_name} to "
+                f"{active_data_sink.data_sink_name}..."
+            )
+
+            associated_data_pull = File.get_recent_data_pull(
+                config_file=config_file,
+                file_path=file_obj.file_path,
+            )
+
+            if associated_data_pull is None:
+                logger.warning(
+                    f"No associated data pull found for file {file_obj.file_name}."
+                )
+                Logs(
+                    log_level="WARN",
+                    log_message={
+                        "event": "data_push_no_associated_data_pull",
+                        "message": (
+                            f"No associated data pull found for file "
+                            f"{file_obj.file_name}."
+                        ),
+                        "file_path": str(file_obj.file_path),
+                        "data_sink_name": active_data_sink.data_sink_name,
+                        "project_id": project_id,
+                        "site_id": site_id,
+                    },
+                ).insert(config_file)
+                subject_id = "unknown"
+                associated_modality = "unknown"
+                associated_data_source_name = "unknown"
+            else:
+                associated_data_source = (
+                    associated_data_pull.get_associated_data_source(
+                        config_file=config_file
+                    )
+                )
+                subject_id = associated_data_pull.subject_id
+                associated_data_source_name = (
+                    associated_data_source.data_source_name
+                )
+                associated_modality = (
+                    associated_data_source.data_source_metadata.get(
+                        "modality", "unknown"
+                    )
                 )
 
-                associated_data_pull = File.get_recent_data_pull(
-                    config_file=config_file,
-                    file_path=file_obj.file_path,
-                )
-
-                if associated_data_pull is None:
-                    logger.warning(
-                        f"No associated data pull found for file {file_obj.file_name}."
-                    )
-                    Logs(
-                        log_level="WARNING",
-                        log_message={
-                            "event": "data_push_no_associated_data_pull",
-                            "message": (
-                                f"No associated data pull found for file "
-                                f"{file_obj.file_name}."
-                            ),
-                            "file_path": str(file_obj.file_path),
-                            "data_sink_name": data_sink.data_sink_name,
-                            "project_id": project_id,
-                            "site_id": site_id,
-                        },
-                    ).insert(config_file)
-                    subject_id = "unknown"
-                    associated_modality = "unknown"
-                    associated_data_source_name = "unknown"
-                else:
-                    associated_data_source = (
-                        associated_data_pull.get_associated_data_source(
-                            config_file=config_file
-                        )
-                    )
-                    subject_id = associated_data_pull.subject_id
-                    associated_data_source_name = (
-                        associated_data_source.data_source_name
-                    )
-                    associated_modality = (
-                        associated_data_source.data_source_metadata.get(
-                            "modality", "unknown"
-                        )
-                    )
-
-                push_file_to_sink(
-                    file_obj=file_obj,
-                    data_sink=data_sink,
-                    data_source_name=associated_data_source_name,
-                    modality=associated_modality,
-                    project_id=data_sink.project_id,
-                    site_id=data_sink.site_id,
-                    subject_id=subject_id,
-                    config_file=config_file,
-                )
+            push_file_to_sink(
+                file_obj=file_obj,
+                data_sink=active_data_sink,
+                data_source_name=associated_data_source_name,
+                modality=associated_modality,
+                project_id=active_data_sink.project_id,
+                site_id=active_data_sink.site_id,
+                subject_id=subject_id,
+                config_file=config_file,
+            )
 
         Logs(
             log_level="INFO",
