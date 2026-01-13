@@ -5,7 +5,7 @@ Logging configuration
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from rich.logging import RichHandler
 
@@ -21,6 +21,8 @@ def configure_logging(
     logger: logging.Logger,
     level: int = logging.DEBUG,
     use_db: bool = True,
+    noisy_modules: Optional[List[str]] = None,
+    noisy_level: int = logging.INFO,
 ) -> None:
     """
     Configures logging for a given module using the specified configuration file.
@@ -112,6 +114,9 @@ def configure_logging(
         db_handler.setLevel(logging.DEBUG)
         root_logger.addHandler(db_handler)
         logger.info("Logging to PostgreSQL database")
+
+    if noisy_modules is not None:
+        silence_logs(noisy_modules, noisy_level)
 
 
 def silence_logs(noisy_modules: List[str], target_level: int = logging.INFO) -> None:

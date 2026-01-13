@@ -51,8 +51,9 @@ logargs: Dict[str, Any] = {
     "handlers": [RichHandler(rich_tracebacks=True)],
 }
 logging.basicConfig(**logargs)
+NOISY_MODULES = ["azure.core.pipeline.policies.http_logging_policy", "urllib3.connectionpool"]
 logs.silence_logs(
-    ["azure.core.pipeline.policies.http_logging_policy", "urllib3.connectionpool"],
+    NOISY_MODULES,
     target_level=logging.WARNING,
 )
 
@@ -493,7 +494,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     logs.configure_logging(
-        config_file=config_file, module_name=MODULE_NAME, logger=logger
+        config_file=config_file, module_name=MODULE_NAME, logger=logger, noisy_modules=NOISY_MODULES
     )
 
     logger.info("Starting data push...")

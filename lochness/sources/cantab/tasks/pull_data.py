@@ -45,7 +45,8 @@ logargs: Dict[str, Any] = {
     "handlers": [RichHandler(rich_tracebacks=True)],
 }
 logging.basicConfig(**logargs)
-logs.silence_logs(["urllib3.connectionpool"])
+NOISY_MODULES = ["urllib3.connectionpool", "paramiko.transport"]
+logs.silence_logs(NOISY_MODULES)
 
 
 def pull_data_for_data_source(
@@ -209,7 +210,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     logs.configure_logging(
-        config_file=config_file, module_name=MODULE_NAME, logger=logger
+        config_file=config_file, module_name=MODULE_NAME, logger=logger, noisy_modules=NOISY_MODULES
     )
 
     project_id = args.project_id
