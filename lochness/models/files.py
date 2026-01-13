@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
-from lochness.helpers import db
+from lochness.helpers import db, utils
 from lochness.helpers import hash as hash_helper
 from lochness.models.data_pulls import DataPull
 
@@ -45,7 +45,9 @@ class File:
         else:
             self.md5 = None
 
-        self.file_metadata: Dict[str, Any] = {}
+        self.file_metadata: Dict[str, Any] = {
+            "available_at": f"hn:{utils.get_hostname()}"
+        }
         self.internal_metadata: Dict[str, Any] = {}
 
     @staticmethod
@@ -249,16 +251,19 @@ class File:
         else:
             hash_val = self.md5
 
+        file_metadata_json = db.sanitize_json(self.file_metadata)
+
         sql_query = f"""
         INSERT INTO files (file_name, file_type, file_size_mb,
-            file_path, file_m_time, file_md5)
+            file_path, file_m_time, file_md5, file_metadata)
         VALUES ('{f_name}', '{self.file_type}', '{self.file_size_mb}',
-            '{f_path}', '{self.m_time}', '{hash_val}')
+            '{f_path}', '{self.m_time}', '{hash_val}', '{file_metadata_json}')
         ON CONFLICT (file_path, file_md5) DO UPDATE SET
             file_name = excluded.file_name,
             file_type = excluded.file_type,
             file_size_mb = excluded.file_size_mb,
-            file_m_time = excluded.file_m_time;
+            file_m_time = excluded.file_m_time,
+            file_metadata = excluded.file_metadata;
         """
 
         sql_query = db.handle_null(sql_query)
@@ -309,6 +314,8 @@ class File:
             file_obj.file_size_mb = row["file_size_mb"]
             file_obj.m_time = row["file_m_time"]
             file_obj.md5 = row["file_md5"]
+            file_obj.file_metadata = row["file_metadata"] if row["file_metadata"] else {}
+            file_obj.internal_metadata = {}
 
             files.append(file_obj)
 

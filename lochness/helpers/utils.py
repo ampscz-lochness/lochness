@@ -5,6 +5,7 @@ Helper functions for the pipeline
 import os
 from pathlib import Path
 from datetime import datetime
+import socket
 
 from rich.console import Console
 from rich.progress import (
@@ -118,3 +119,14 @@ def explode_col(df: pd.DataFrame, col: str) -> pd.DataFrame:
     )
 
     return df
+
+
+def get_hostname() -> str:
+    """
+    Returns the hostname of the current machine.
+
+    Returns:
+        str: The hostname of the current machine.
+    """
+    hostname = socket.gethostname()
+    return hostname
