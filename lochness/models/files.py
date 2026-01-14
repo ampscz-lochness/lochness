@@ -46,7 +46,7 @@ class File:
             self.md5 = None
 
         self.file_metadata: Dict[str, Any] = {
-            "available_at": f"hn:{utils.get_hostname()}"
+            "available_at": [f"hn:{utils.get_hostname()}"]
         }
         self.internal_metadata: Dict[str, Any] = {}
 
@@ -118,7 +118,7 @@ class File:
             file_path TEXT NOT NULL,
             file_m_time TIMESTAMP NOT NULL,
             file_md5 TEXT NOT NULL,
-            file_metadata JSONB,
+            file_metadata JSONB NOT NULL,
             PRIMARY KEY (file_path, file_md5)
         );
         """
@@ -330,3 +330,74 @@ class File:
             AND file_md5 = '{self.md5}';
         """
         return query
+
+    def add_available_at_query(self, location: str) -> str:
+        """
+        Generate SQL query to add a location to the file's available_at metadata.
+        Ensures no repetition by maintaining a set of locations.
+
+        Args:
+            location (str): Location identifier (e.g., 'ds:123' for data sink,
+                'hn:hostname' for local copy)
+
+        Returns:
+            str: SQL query to update the file's metadata, or empty string if
+                location already exists
+        """
+        # Get current available_at or initialize as list
+        available_at = self.file_metadata.get("available_at", [])
+        if isinstance(available_at, str):
+            available_at = [available_at]
+        elif not isinstance(available_at, list):
+            available_at = []
+
+        # Add location if not already present
+        if location not in available_at:
+            available_at.append(location)
+            self.file_metadata["available_at"] = available_at
+
+            # Generate update query
+            file_metadata_json = db.sanitize_json(self.file_metadata)
+            f_path = db.sanitize_string(str(self.file_path))
+            update_query = f"""
+            UPDATE files
+            SET file_metadata = '{file_metadata_json}'
+            WHERE file_path = '{f_path}' AND file_md5 = '{self.md5}';
+            """
+            return update_query
+        return ""
+
+    def remove_available_at_query(self, location: str) -> str:
+        """
+        Generate SQL query to remove a location from the file's available_at metadata.
+
+        Args:
+            location (str): Location identifier to remove (e.g., 'ds:123' for data sink,
+                'hn:hostname' for local copy)
+
+        Returns:
+            str: SQL query to update the file's metadata, or empty string if
+                location doesn't exist
+        """
+        # Get current available_at
+        available_at = self.file_metadata.get("available_at", [])
+        if isinstance(available_at, str):
+            available_at = [available_at]
+        elif not isinstance(available_at, list):
+            available_at = []
+
+        # Remove location if present
+        if location in available_at:
+            available_at.remove(location)
+            self.file_metadata["available_at"] = available_at
+
+            # Generate update query
+            file_metadata_json = db.sanitize_json(self.file_metadata)
+            f_path = db.sanitize_string(str(self.file_path))
+            update_query = f"""
+            UPDATE files
+            SET file_metadata = '{file_metadata_json}'
+            WHERE file_path = '{f_path}' AND file_md5 = '{self.md5}';
+            """
+            return update_query
+        return ""

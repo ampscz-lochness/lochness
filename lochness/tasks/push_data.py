@@ -133,6 +133,17 @@ def push_file_to_sink(
                 silent=True,
             )
 
+            # Update file metadata to track data sink availability
+            data_sink_id: int = data_sink.get_data_sink_id(config_file)  # type: ignore
+            update_query = file_obj.add_available_at_query(f"ds:{data_sink_id}")
+            if update_query:
+                db.execute_queries(
+                    config_file,
+                    [update_query],
+                    show_commands=False,
+                    silent=True,
+                )
+
             Logs(
                 log_level="INFO",
                 log_message={
