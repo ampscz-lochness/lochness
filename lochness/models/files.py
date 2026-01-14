@@ -278,22 +278,32 @@ class File:
         data_sink_id: int,
     ) -> List["File"]:
         """
-        Return the files to push for a given project and site.
+        Return the most recent version of files to push for a given project and site.
+        Only returns the latest file (by file_m_time) for each unique file_path
+        that has not yet been pushed to the specified data sink.
         """
         query = f"""
-        SELECT DISTINCT files.*
-        FROM files
-        LEFT JOIN data_pull ON (
-            data_pull.file_path = files.file_path AND
-            data_pull.file_md5 = files.file_md5
-        )
+        SELECT files.*
+        FROM (
+            SELECT files.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY files.file_path
+                    ORDER BY files.file_m_time DESC
+                ) as rn
+            FROM files
+            LEFT JOIN data_pull ON (
+                data_pull.file_path = files.file_path AND
+                data_pull.file_md5 = files.file_md5
+            )
+            WHERE data_pull.project_id = '{project_id}'
+                AND data_pull.site_id = '{site_id}'
+        ) files
         LEFT JOIN data_push ON (
             data_push.file_path = files.file_path AND
             data_push.file_md5 = files.file_md5 AND
             data_push.data_sink_id = {data_sink_id}
         )
-        WHERE data_pull.project_id = '{project_id}'
-            AND data_pull.site_id = '{site_id}'
+        WHERE files.rn = 1
             AND data_push.data_sink_id IS NULL;
         """
 
