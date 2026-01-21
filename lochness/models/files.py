@@ -241,6 +241,8 @@ class File:
 
     def to_sql_query(self) -> str:
         """
+        WARNING: Internal Use Only. Use `to_sql_queries_with_availability_update` instead.
+
         Return the SQL query to insert the File object into the 'files' table.
         """
         f_name = db.sanitize_string(self.file_name)
@@ -269,6 +271,33 @@ class File:
         sql_query = db.handle_null(sql_query)
 
         return sql_query
+
+    def to_sql_queries_with_availability_update(self) -> List[str]:
+        """
+        Return SQL queries to insert the File object and update old versions.
+
+        When a new file is written to the same path, the old file at that path
+        is no longer available locally. This method generates:
+        1. A query to remove the current hostname from old versions at same path
+        2. A query to insert/update the current file record
+
+        Returns:
+            List[str]: List of SQL queries to execute in order.
+        """
+        queries: List[str] = []
+        hostname_location = f"hn:{utils.get_hostname()}"
+
+        if self.md5 is not None:
+            remove_old_query = File.remove_availability_query(
+                file_path=self.file_path,
+                current_md5=self.md5,
+                location=hostname_location,
+            )
+            queries.append(remove_old_query)
+
+        queries.append(self.to_sql_query())
+
+        return queries
 
     @staticmethod
     def get_files_to_push(
@@ -324,12 +353,66 @@ class File:
             file_obj.file_size_mb = row["file_size_mb"]
             file_obj.m_time = row["file_m_time"]
             file_obj.md5 = row["file_md5"]
-            file_obj.file_metadata = row["file_metadata"] if row["file_metadata"] else {}
+            file_obj.file_metadata = (
+                row["file_metadata"] if row["file_metadata"] else {}
+            )
             file_obj.internal_metadata = {}
 
             files.append(file_obj)
 
         return files
+
+    @staticmethod
+    def remove_availability_query(
+        file_path: Path,
+        current_md5: str,
+        location: str,
+    ) -> str:
+        """
+        Generate SQL query to remove a location from all previous versions of a file.
+
+        When a file at the same path is overwritten (locally or in a data sink),
+        the previous version is no longer available at that location. This method
+        generates a query to update the `available_at` metadata for all files at
+        the same path with a different MD5 hash.
+
+        Args:
+            file_path (Path): The file path to match.
+            current_md5 (str): The MD5 of the current/new file (will be excluded).
+            location (str): Location identifier to remove (e.g., 'ds:123' for data sink,
+                'hn:hostname' for local copy)
+
+        Returns:
+            str: SQL query to update the old files' metadata.
+        """
+        f_path = db.sanitize_string(str(file_path))
+        current_md5_sanitized = db.sanitize_string(current_md5)
+        location_sanitized = db.sanitize_string(location)
+
+        # Use PostgreSQL's jsonb operators to remove the location from available_at array
+        # This handles all files at the same path with different MD5
+        query = f"""
+        UPDATE files
+        SET file_metadata = jsonb_set(
+            file_metadata,
+            '{{available_at}}',
+            (
+                SELECT COALESCE(
+                    jsonb_agg(elem),
+                    '[]'::jsonb
+                )
+                FROM jsonb_array_elements(
+                    COALESCE(file_metadata->'available_at', '[]'::jsonb)
+                ) AS elem
+                WHERE elem::text != '"{location_sanitized}"'
+            )
+        )
+        WHERE file_path = '{f_path}'
+            AND file_md5 != '{current_md5_sanitized}'
+            AND file_metadata->'available_at' @> '["{location_sanitized}"]'::jsonb;
+        """
+
+        return query
 
     def delete_record_query(self) -> str:
         """Generate a query to delete a record from the table"""
@@ -364,41 +447,6 @@ class File:
         # Add location if not already present
         if location not in available_at:
             available_at.append(location)
-            self.file_metadata["available_at"] = available_at
-
-            # Generate update query
-            file_metadata_json = db.sanitize_json(self.file_metadata)
-            f_path = db.sanitize_string(str(self.file_path))
-            update_query = f"""
-            UPDATE files
-            SET file_metadata = '{file_metadata_json}'
-            WHERE file_path = '{f_path}' AND file_md5 = '{self.md5}';
-            """
-            return update_query
-        return ""
-
-    def remove_available_at_query(self, location: str) -> str:
-        """
-        Generate SQL query to remove a location from the file's available_at metadata.
-
-        Args:
-            location (str): Location identifier to remove (e.g., 'ds:123' for data sink,
-                'hn:hostname' for local copy)
-
-        Returns:
-            str: SQL query to update the file's metadata, or empty string if
-                location doesn't exist
-        """
-        # Get current available_at
-        available_at = self.file_metadata.get("available_at", [])
-        if isinstance(available_at, str):
-            available_at = [available_at]
-        elif not isinstance(available_at, list):
-            available_at = []
-
-        # Remove location if present
-        if location in available_at:
-            available_at.remove(location)
             self.file_metadata["available_at"] = available_at
 
             # Generate update query
