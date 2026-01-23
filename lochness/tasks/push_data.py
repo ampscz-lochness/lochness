@@ -637,7 +637,7 @@ def push_all_data(
                     "data_sink_id": data_sink_id,
                 },
             ).insert(config_file)
-            return
+            continue
 
         logger.info(f"Found {len(files_to_push)} files to push.")
         Logs(
