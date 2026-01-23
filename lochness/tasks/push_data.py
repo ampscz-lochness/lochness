@@ -61,6 +61,8 @@ logs.silence_logs(
     target_level=logging.WARNING,
 )
 
+LOG_FREQUENCY = 10  # Log every N files pushed
+
 
 class FileSourceResult:
     """
@@ -657,11 +659,12 @@ def push_all_data(
             },
         ).insert(config_file)
 
-        for file_obj in files_to_push:
-            logger.info(
-                f"Attempting to push {file_obj.file_name} to "
-                f"{active_data_sink.data_sink_name}..."
-            )
+        for idx, file_obj in enumerate(files_to_push):
+            if idx % LOG_FREQUENCY == 0:
+                logger.info(
+                    f"Attempting to push {file_obj.file_name} to "
+                    f"{active_data_sink.data_sink_name}..."
+                )
 
             # Resolve where to source the file from
             source_result = resolve_file_source(
