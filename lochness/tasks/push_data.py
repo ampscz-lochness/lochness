@@ -358,6 +358,10 @@ def push_file_to_sink(
         push_time_s = int((end_time - start_time).total_seconds())
 
         if data_push:
+            # Replace data_push's file_path and file_md5 with the original values
+            data_push.file_path = str(file_obj.file_path)
+            data_push.file_md5 = file_obj.md5  # type: ignore
+
             # Update file metadata to track data sink availability
             data_sink_id: int = data_sink.get_data_sink_id(config_file)  # type: ignore
             ds_location = f"ds:{data_sink_id}"
