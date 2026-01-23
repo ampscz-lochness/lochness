@@ -158,3 +158,109 @@ class AzureBlobSink(DataSinkI):
         )
 
         return data_push
+
+    def pull(
+        self,
+        data_push: DataPush,
+        destination_path: Path,
+        config_file: Path,
+    ) -> Optional[Path]:
+        """
+        Pulls data from Azure Blob Storage.
+
+        Args:
+            data_push (DataPush): The DataPush object containing push metadata.
+            destination_path (Path): The local path where the file will be saved.
+            config_file (Path): Path to the configuration file.
+
+        Returns:
+            Optional[Path]: The path to the downloaded file if successful, None otherwise.
+        """
+        # Validate that the DataPush is associated with this DataSink
+        current_data_sink_id = self.data_sink.get_data_sink_id(config_file=config_file)
+        if data_push.data_sink_id != current_data_sink_id:
+            error_msg = (
+                f"DataPush (data_sink_id={data_push.data_sink_id}) is not associated "
+                f"with this DataSink (data_sink_id={current_data_sink_id}, "
+                f"name='{self.data_sink.data_sink_name}'). Cannot pull file."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        azure_metadata = self.data_sink.data_sink_metadata
+        container_name: Optional[str] = azure_metadata.get("container_name")
+        keystore_name: Optional[str] = azure_metadata.get("keystore_name")
+
+        if not all([container_name, keystore_name]):
+            logger.error(
+                f"Missing Azure Blob Storage configuration (container_name, or "
+                f"keystore_name) for sink {self.data_sink.data_sink_name}"
+            )
+            raise ValueError("Incomplete Azure Blob Storage configuration.")
+
+        # Retrieve Azure Blob Storage credentials from the keystore
+        keystore_data = KeyStore.retrieve_keystore(
+            key_name=keystore_name,  # type: ignore
+            project_id=self.data_sink.project_id,
+            config_file=config_file,
+        )
+
+        if not keystore_data:
+            logger.error(
+                f"Failed to retrieve keystore data for {keystore_name} "
+                f"in project {self.data_sink.project_id}"
+            )
+            raise ValueError("Keystore data not found for the specified keystore name.")
+
+        keystore_value: Dict[str, Any] = json.loads(keystore_data.key_value)
+        connection_string: Optional[str] = keystore_value.get("connection_string", None)
+
+        if not connection_string:
+            logger.error(
+                f"Missing Azure Blob Storage connection_string "
+                f"for keystore {keystore_name} in project {self.data_sink.project_id}"
+            )
+            raise ValueError("Incomplete Azure Blob Storage credentials.")
+
+        # Extract object name from push metadata
+        object_name: Optional[str] = data_push.push_metadata.get("object_name")
+
+        if not object_name:
+            logger.error(
+                f"Missing object_name in DataPush metadata for data_push_id {data_push}"
+            )
+            raise ValueError("Missing object_name in DataPush metadata.")
+
+        try:
+            with Timer() as timer:
+                azure_api.download_from_blob(
+                    connection_string=connection_string,  # type: ignore
+                    container_name=container_name,  # type: ignore
+                    blob_name=object_name,
+                    destination_file_path=destination_path,
+                )
+            logger.info(
+                f"Successfully downloaded file from Azure Blob Storage to "
+                f"{destination_path} in {timer.duration:.2f}s"
+            )
+            return destination_path
+
+        except Exception as e:  # pylint: disable=broad-except
+            log_message = (
+                f"Failed to pull file from Azure Blob Storage "
+                f"(container: {container_name}, blob: {object_name}): {e}"
+            )
+            logger.error(log_message)
+
+            Logs(
+                log_level="ERROR",
+                log_message={
+                    "event": "azure_blob_pull_error",
+                    "message": log_message,
+                    "data_sink_name": self.data_sink.data_sink_name,
+                    "project_id": self.data_sink.project_id,
+                    "site_id": self.data_sink.site_id,
+                    "destination_path": str(destination_path),
+                },
+            ).insert(config_file)
+            raise e

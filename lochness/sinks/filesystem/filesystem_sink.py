@@ -271,3 +271,129 @@ class FilesystemSink(DataSinkI):
         )
 
         return data_push
+
+    def pull(
+        self,
+        data_push: DataPush,
+        destination_path: Path,
+        config_file: Path,
+    ) -> Optional[Path]:
+        """
+        Pulls data from the filesystem sink using rsync.
+
+        Args:
+            data_push (DataPush): The DataPush object containing push metadata.
+            destination_path (Path): The local path where the file will be saved.
+            config_file (Path): Path to the configuration file.
+
+        Returns:
+            Optional[Path]: The path to the downloaded file if successful, None otherwise.
+        """
+        # Validate that the DataPush is associated with this DataSink
+        current_data_sink_id = self.data_sink.get_data_sink_id(config_file=config_file)
+        if data_push.data_sink_id != current_data_sink_id:
+            error_msg = (
+                f"DataPush (data_sink_id={data_push.data_sink_id}) is not associated "
+                f"with this DataSink (data_sink_id={current_data_sink_id}, "
+                f"name='{self.data_sink.data_sink_name}'). Cannot pull file."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        self._validate_rsync_available()
+
+        filesystem_metadata = self.data_sink.data_sink_metadata
+        keystore_name: Optional[str] = filesystem_metadata.get("keystore_name")
+
+        if not keystore_name:
+            logger.error(
+                f"Missing filesystem configuration (keystore_name) "
+                f"for sink {self.data_sink.data_sink_name}"
+            )
+            raise ValueError("Missing filesystem configuration in data sink metadata.")
+
+        keystore_data = KeyStore.retrieve_keystore(
+            key_name=keystore_name,
+            project_id=self.data_sink.project_id,
+            config_file=config_file,
+        )
+
+        if not keystore_data:
+            logger.error(
+                f"Failed to retrieve keystore data for {keystore_name} "
+                f"in project {self.data_sink.project_id}"
+            )
+            raise ValueError("Keystore data not found for the specified keystore name.")
+
+        keystore_value: Dict[str, Any] = json.loads(keystore_data.key_value)
+        destination_base_path: Optional[str] = keystore_value.get("destination_path")
+        ssh_host: Optional[str] = keystore_value.get("ssh_host")
+        ssh_user: Optional[str] = keystore_value.get("ssh_user")
+        ssh_key_path: Optional[str] = keystore_value.get("ssh_key_path")
+        ssh_port: int = keystore_value.get("ssh_port", 22)
+        remote_rsync_bin_path: Optional[str] = keystore_value.get("remote_rsync_bin_path")
+
+        if not destination_base_path:
+            logger.error(
+                f"Missing destination_path in keystore for sink "
+                f"{self.data_sink.data_sink_name}"
+            )
+            raise ValueError("Missing destination_path in filesystem credentials.")
+
+        # Extract object name from push metadata
+        object_name: Optional[str] = data_push.push_metadata.get("object_name")
+
+        if not object_name:
+            logger.error(
+                f"Missing object_name in DataPush metadata for data_push {data_push}"
+            )
+            raise ValueError("Missing object_name in DataPush metadata.")
+
+        # Construct source path (where the file was pushed)
+        if ssh_host and ssh_user:
+            # Remote source via SSH
+            source_path = (
+                f"{ssh_user}@{ssh_host}:{destination_base_path}/{object_name}"
+            )
+        else:
+            # Local source
+            source_path = str(Path(destination_base_path) / object_name)
+
+        # Ensure the destination directory exists
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with Timer() as timer:
+                command = self._build_rsync_command(
+                    source_path=Path(source_path) if not (ssh_host and ssh_user) else source_path,  # type: ignore
+                    destination=str(destination_path),
+                    ssh_key_path=ssh_key_path,
+                    ssh_port=ssh_port,
+                    remote_rsync_bin_path=remote_rsync_bin_path,
+                )
+                self._execute_rsync(command)
+
+            logger.info(
+                f"Successfully pulled file from filesystem to "
+                f"{destination_path} in {timer.duration:.2f}s"
+            )
+            return destination_path
+
+        except Exception as e:
+            log_message = (
+                f"Failed to pull file from filesystem source {source_path}: {e}"
+            )
+            logger.error(log_message)
+
+            Logs(
+                log_level="ERROR",
+                log_message={
+                    "event": "filesystem_pull_error",
+                    "message": log_message,
+                    "data_sink_name": self.data_sink.data_sink_name,
+                    "project_id": self.data_sink.project_id,
+                    "site_id": self.data_sink.site_id,
+                    "destination_path": str(destination_path),
+                },
+            ).insert(config_file)
+            raise

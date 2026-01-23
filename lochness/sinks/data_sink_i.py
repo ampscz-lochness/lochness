@@ -40,5 +40,18 @@ class DataSinkI(abc.ABC):
         This is an abstract method and MUST be implemented by any subclass.
         """
 
+    @abc.abstractmethod
+    def pull(
+        self,
+        data_push: DataPush,
+        destination_path: Path,
+        config_file: Path,
+    ) -> Optional[Path]:
+        """
+        Pulls data from the sink.
+
+        This is an abstract method and MUST be implemented by any subclass.
+        """
+
     def __str__(self):
         return f"<{self.__class__.__name__}>"

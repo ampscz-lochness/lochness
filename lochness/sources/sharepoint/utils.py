@@ -152,11 +152,15 @@ def find_subfolders(
             logger.info(f"Found subfolder '{subfolder_name_patt}' in parent {parent_id}")
             subfolders.append(item)
 
-    if subfolders == "":
-        logger.warning(f"Subfolder matching '{subfolder_name_patt}' pattern not found in parent {parent_id}")
+    if not subfolders:
+        logger.warning(
+            f"Subfolder matching '{subfolder_name_patt}' pattern not found in parent "
+            f"{parent_id}"
+        )
         return None
 
     return subfolders
+
 
 def get_matching_subfolders(
     drive_id: str,
@@ -193,7 +197,7 @@ def get_matching_subfolders(
             logger.info(f"No subfolders found in '{subdir_name}'.")
         else:
             logger.info(f"Found {len(subfolders)} subfolders for form:'{subdir_name}'.")
-        return subfolders
+        return subfolders  # type: ignore
 
     matching_folder = find_subfolder(
         drive_id, ms_folder_dict["id"], subdir_name, headers, timeout=timeout
@@ -358,7 +362,9 @@ def download_subdirectory(
         file_model = File(file_path=removed_file_path)
         file_model.md5 = "DELETED_FROM_TEAMS_FORM"
         db.execute_queries(
-            config_file, [file_model.to_sql_query()], show_commands=False
+            config_file,
+            file_model.to_sql_queries_with_availability_update(),
+            show_commands=False,
         )
 
     # Download all other files
@@ -423,11 +429,11 @@ def download_subdirectory(
                     pull_metadata={"quickxorhash": quick_xor_hash},
                 )
 
-                queries = [
-                    file_model.to_sql_query(),
-                    hash_file_model.to_sql_query(),
-                    data_pull.to_sql_query(),
-                ]
+                queries = (
+                    file_model.to_sql_queries_with_availability_update()
+                    + hash_file_model.to_sql_queries_with_availability_update()
+                    + [data_pull.to_sql_query()]
+                )
                 db.execute_queries(config_file, queries, show_commands=False)
 
 
@@ -489,7 +495,7 @@ def is_response_json_updated(
         download_file(download_url, temp_file_path)
 
         form_subject_id, form_title, dt_str, timestamp = extract_info(
-                temp_file_path, date_str)
+            temp_file_path, date_str)
 
         if form_subject_id != subject_id:
             logger.info(
@@ -526,8 +532,7 @@ def is_response_json_updated(
         response_json_local = output_dir / "response.submitted.json"
         timestamp_pre = None
         if response_json_local.is_file():
-            _, _, _, timestamp_pre = extract_info(response_json_local,
-                                                  date_str)
+            _, _, _, timestamp_pre = extract_info(response_json_local, date_str)
             logger.debug("Response json exists: %s", timestamp_pre)
         else:
             logger.debug(

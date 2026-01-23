@@ -98,3 +98,38 @@ def upload_to_blob(
         )
 
     return None
+
+
+def download_from_blob(
+    connection_string: str,
+    container_name: str,
+    blob_name: str,
+    destination_file_path: Path,
+) -> None:
+    """
+    Download a file from an Azure Blob Storage container.
+
+    Args:
+        connection_string (str): The Azure Blob Storage connection string.
+        container_name (str): The name of the container to download from.
+        blob_name (str): The name of the blob (file) in the container.
+        destination_file_path (Path): The local path where the file will be saved.
+
+    Returns:
+        None
+
+    Raises:
+        AzureError: If there's an error downloading the blob.
+    """
+    blob_service_client = get_blob_service_client(connection_string)
+    container_client = blob_service_client.get_container_client(container_name)
+    blob_client = container_client.get_blob_client(blob_name)
+
+    # Ensure the destination directory exists
+    destination_file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(file=destination_file_path, mode="wb") as download_file:
+        download_stream = blob_client.download_blob()
+        download_file.write(download_stream.readall())
+
+    return None

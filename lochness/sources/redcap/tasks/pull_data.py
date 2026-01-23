@@ -332,7 +332,9 @@ def save_subject_data(
         )
         file_md5 = file_model.md5
         db.execute_queries(
-            config_file, [file_model.to_sql_query()], show_commands=False
+            config_file,
+            file_model.to_sql_queries_with_availability_update(),
+            show_commands=False,
         )
         log_event(
             config_file=config_file,

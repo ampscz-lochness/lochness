@@ -169,3 +169,125 @@ class MinioSink(DataSinkI):
         )
 
         return data_push
+
+    def pull(
+        self,
+        data_push: DataPush,
+        destination_path: Path,
+        config_file: Path,
+    ) -> Optional[Path]:
+        """
+        Pulls data from the MinIO sink.
+
+        Args:
+            data_push (DataPush): The DataPush object containing push metadata.
+            destination_path (Path): The local path where the file will be saved.
+            config_file (Path): Path to the configuration file.
+
+        Returns:
+            Optional[Path]: The path to the downloaded file if successful, None otherwise.
+        """
+        # Validate that the DataPush is associated with this DataSink
+        current_data_sink_id = self.data_sink.get_data_sink_id(config_file=config_file)
+        if data_push.data_sink_id != current_data_sink_id:
+            error_msg = (
+                f"DataPush (data_sink_id={data_push.data_sink_id}) is not associated "
+                f"with this DataSink (data_sink_id={current_data_sink_id}, "
+                f"name='{self.data_sink.data_sink_name}'). Cannot pull file."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        minio_metadata = self.data_sink.data_sink_metadata
+        bucket_name: Optional[str] = minio_metadata.get("bucket_name")
+        keystore_name: Optional[str] = minio_metadata.get("keystore_name")
+
+        if not all([bucket_name, keystore_name]):
+            logger.error(
+                f"Missing MinIO configuration (bucket_name, or "
+                f"keystore_name) for sink {self.data_sink.data_sink_name}"
+            )
+            raise ValueError("Missing MinIO configuration in data sink metadata.")
+
+        keystore_data = KeyStore.retrieve_keystore(
+            key_name=keystore_name,  # type: ignore
+            project_id=self.data_sink.project_id,
+            config_file=config_file,
+        )
+
+        if not keystore_data:
+            logger.error(
+                f"Failed to retrieve keystore data for {keystore_name} "
+                f"in project {self.data_sink.project_id}"
+            )
+            raise ValueError("Keystore data not found for the specified keystore name.")
+
+        keystore_value: Dict[str, Any] = json.loads(keystore_data.key_value)
+        access_key: Optional[str] = keystore_value.get("access_key", None)
+        secret_key: Optional[str] = keystore_value.get("secret_key", None)
+        endpoint_url: Optional[str] = keystore_value.get("endpoint_url", None)
+
+        if not all([access_key, secret_key, endpoint_url]):
+            logger.error(
+                "Missing MinIO credentials (access_key, secret_key, or endpoint_url) in "
+                f"KeyStore for sink {self.data_sink.data_sink_name}"
+            )
+            raise ValueError("Missing MinIO credentials in KeyStore.")
+
+        # Extract object name from push metadata
+        object_name: Optional[str] = data_push.push_metadata.get("object_name")
+
+        if not object_name:
+            logger.error(
+                f"Missing object_name in DataPush metadata for data_push {data_push}"
+            )
+            raise ValueError("Missing object_name in DataPush metadata.")
+
+        # Ensure the destination directory exists
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with Timer() as timer:
+                parsed_url = urlparse(endpoint_url)
+                endpoint = parsed_url.hostname
+
+                if parsed_url.port:
+                    endpoint = f"{endpoint}:{parsed_url.port}"
+
+                client = Minio(
+                    endpoint=endpoint,  # type: ignore
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    secure=parsed_url.scheme == "https",
+                )
+                client.fget_object(
+                    bucket_name,  # type: ignore
+                    object_name,
+                    str(destination_path),
+                )
+
+            logger.info(
+                f"Successfully pulled file from MinIO to "
+                f"{destination_path} in {timer.duration:.2f}s"
+            )
+            return destination_path
+
+        except Exception as e:  # pylint: disable=broad-except
+            log_message = (
+                f"Failed to pull file from MinIO bucket {bucket_name}, "
+                f"object {object_name}: {e}"
+            )
+            logger.error(log_message)
+
+            Logs(
+                log_level="ERROR",
+                log_message={
+                    "event": "minio_pull_error",
+                    "message": log_message,
+                    "data_sink_name": self.data_sink.data_sink_name,
+                    "project_id": self.data_sink.project_id,
+                    "site_id": self.data_sink.site_id,
+                    "destination_path": str(destination_path),
+                },
+            ).insert(config_file)
+            raise e

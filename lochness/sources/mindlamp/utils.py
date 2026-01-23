@@ -347,7 +347,9 @@ def fetch_subject_data_for_date(
         logger.debug(f"Fetched {len(audio_file_paths)} audio files for {identifier}.")
 
     if data_pulls:
-        queries = [file.to_sql_query() for file in associated_files]
+        queries: List[str] = []
+        for file in associated_files:
+            queries.extend(file.to_sql_queries_with_availability_update())
         queries += [data_pull.to_sql_query() for data_pull in data_pulls]
         db.execute_queries(
             config_file=config_file,
