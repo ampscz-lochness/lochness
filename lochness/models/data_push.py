@@ -4,7 +4,7 @@ configured data sink. (Typically a Object Store)
 """
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 
@@ -83,16 +83,78 @@ class DataPush(BaseModel):
         push_metadata = db.sanitize_json(self.push_metadata)
 
         sql_query = f"""
-            INSERT INTO data_push (data_sink_id, file_path, file_md5, push_time_s, push_metadata)
-            VALUES ({self.data_sink_id}, '{file_path}', '{file_md5}', {push_time_s}, '{push_metadata}');
+            INSERT INTO data_push (
+                data_sink_id,
+                file_path,
+                file_md5,
+                push_time_s,
+                push_metadata
+            )
+            VALUES (
+                {self.data_sink_id},
+                '{file_path}',
+                '{file_md5}',
+                {push_time_s},
+                '{push_metadata}'
+            );
         """
 
         return sql_query
 
+    @staticmethod
+    def get_data_push(
+        config_file: Path,
+        data_sink_id: int,
+        file_path: str,
+        file_md5: str,
+    ) -> "Optional[DataPush]":
+        """
+        Retrieves a DataPush record by data_sink_id, file_path, and file_md5.
+
+        Args:
+            config_file (Path): Path to the configuration file.
+            data_sink_id (int): The data sink ID.
+            file_path (str): The file path.
+            file_md5 (str): The MD5 hash of the file.
+
+        Returns:
+            Optional[DataPush]: The DataPush object if found, None otherwise.
+        """
+        sanitized_file_path = db.sanitize_string(file_path)
+        sanitized_file_md5 = db.sanitize_string(file_md5)
+
+        query = f"""
+            SELECT data_sink_id, file_path, file_md5, push_time_s,
+                push_timestamp, push_metadata
+            FROM data_push
+            WHERE data_sink_id = {data_sink_id}
+                AND file_path = '{sanitized_file_path}'
+                AND file_md5 = '{sanitized_file_md5}'
+            LIMIT 1;
+        """
+        result_df = db.execute_sql(config_file, query)
+
+        if result_df.empty:
+            return None
+
+        row = result_df.iloc[0]
+        data_push = DataPush(
+            data_sink_id=row["data_sink_id"],
+            file_path=row["file_path"],
+            file_md5=row["file_md5"],
+            push_time_s=row["push_time_s"],
+            push_timestamp=str(row["push_timestamp"]),
+            push_metadata=row["push_metadata"],
+        )
+
+        return data_push
+
     def delete_record_query(self, data_sink_id) -> str:
         """Generate a query to delete a record from the table"""
-        query = f"""DELETE FROM data_push
+        query = f"""
+        DELETE FROM data_push
         WHERE data_sink_id = '{data_sink_id}'
-          AND file_path = '{self.file_path}'
-          AND file_md5 = '{self.file_md5}';"""
+            AND file_path = '{self.file_path}'
+            AND file_md5 = '{self.file_md5}';
+        """
         return query

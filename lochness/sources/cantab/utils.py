@@ -148,8 +148,7 @@ def pull_data_for_subject(
 
     queries: List[str] = []
     for file in associated_files:
-        file_query = file.to_sql_query()
-        queries.append(file_query)
+        queries.extend(file.to_sql_queries_with_availability_update())
 
     db.execute_queries(
         config_file=config_file,

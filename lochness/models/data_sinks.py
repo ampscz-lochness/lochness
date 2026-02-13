@@ -206,35 +206,42 @@ class DataSink(BaseModel):
 
         return int(data_sink_id)
 
-    def is_file_already_pushed(
-        self, config_file: Path, file_path: Path, md5: str
-    ) -> bool:
+    @staticmethod
+    def get_data_sink_by_id(
+        config_file: Path, data_sink_id: int
+    ) -> "Optional[DataSink]":
         """
-        Check if a file (with the same hash) has already been pushed to the data sink.
+        Retrieves a DataSink by its ID.
 
         Args:
             config_file (Path): Path to the configuration file.
-            file_path (Path): Path to the file.
-            md5 (str): MD5 hash of the file.
+            data_sink_id (int): The data sink ID.
 
         Returns:
-            bool: True if the file has already been pushed, False otherwise.
+            Optional[DataSink]: The DataSink object if found, None otherwise.
         """
-        data_sink_id = self.get_data_sink_id(config_file)
         query = f"""
-            SELECT 1
-            FROM data_push
-            WHERE
-                data_sink_id = {data_sink_id}
-                AND file_path = '{file_path}'
-                AND file_md5 = '{md5}'
+            SELECT data_sink_name, data_sink_is_active,
+                site_id, project_id, data_sink_metadata
+            FROM data_sinks
+            WHERE data_sink_id = {data_sink_id}
             LIMIT 1;
-            """
-        push_exists = len(db.execute_sql(config_file, query)) > 0
-        if not push_exists:
-            return False
-        else:
-            return True
+        """
+        data_sinks_df = db.execute_sql(config_file, query)
+
+        if data_sinks_df.empty:
+            return None
+
+        row = data_sinks_df.iloc[0]
+        data_sink = DataSink(
+            data_sink_name=row["data_sink_name"],
+            is_active=row["data_sink_is_active"],
+            site_id=row["site_id"],
+            project_id=row["project_id"],
+            data_sink_metadata=row["data_sink_metadata"],
+        )
+
+        return data_sink
 
     def delete_record_query(self) -> str:
         """
