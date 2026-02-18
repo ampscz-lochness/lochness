@@ -201,6 +201,10 @@ class Subject(BaseModel):
         SELECT *
         FROM subjects
         WHERE project_id = '{project_id}' AND site_id = '{site_id}'
+            AND (
+                subject_metadata->>'missing_required_variables' IS NULL OR
+                subject_metadata->>'missing_required_variables' = ''
+            )
         """
 
         # Dynamically append WHERE clauses for each metadata filter
@@ -269,7 +273,10 @@ class Subject(BaseModel):
             subject_id, site_id, project_id, subject_metadata
         FROM subjects
         WHERE project_id = '{project_id}' AND
-            site_id = '{site_id}';
+            site_id = '{site_id}' AND (
+                subject_metadata->>'missing_required_variables' IS NULL OR
+                subject_metadata->>'missing_required_variables' = ''
+            )
         """
         subjects_df = db.execute_sql(config_file, query)
 
