@@ -238,8 +238,33 @@ def fetch_metadata(
     flattened_df = flatten_by_subject_id(df)
 
     # Drop rows without required variables
-    for required_variable in required_variables:
-        flattened_df = flattened_df[flattened_df[required_variable].notna()]
+    # for required_variable in required_variables:
+    #     flattened_df = flattened_df[flattened_df[required_variable].notna()]
+
+    for idx, row in flattened_df.iterrows():  # type: ignore
+        missing_required_vars: List[str] = []
+        for required_variable in required_variables:
+            if pd.isna(row.get(required_variable)):
+                missing_required_vars.append(required_variable)
+        if missing_required_vars:
+            log_event(
+                config_file=config_file,
+                log_level="WARNING",
+                event="redcap_metadata_fetch_missing_required_variable",
+                message=(
+                    f"Record with subject_id {row['subject_id']} is missing required "
+                    f"variables: {', '.join(missing_required_vars)}."
+                ),
+                project_id=project_id,
+                site_id=site_id,
+                data_source_name=data_source_name,
+                extra={"subject_id": row["subject_id"], "missing_variables": missing_required_vars},
+            )
+            # Add a column to indicate missing required variables
+            flattened_df.at[idx, "missing_required_variables"] = ", ".join(missing_required_vars)
+        else:
+            flattened_df.at[idx, "missing_required_variables"] = ""
+
 
     flattened_df = flattened_df.reset_index(drop=True)
     return pd.DataFrame(flattened_df)
