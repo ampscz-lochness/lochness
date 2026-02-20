@@ -249,7 +249,7 @@ def fetch_metadata(
         if missing_required_vars:
             log_event(
                 config_file=config_file,
-                log_level="WARNING",
+                log_level="WARN",
                 event="redcap_metadata_fetch_missing_required_variable",
                 message=(
                     f"Record with subject_id {row['subject_id']} is missing required "
