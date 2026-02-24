@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from lochness.helpers import db
 from lochness.helpers.db import get_db_connection
@@ -24,7 +24,10 @@ class RedcapDataSourceMetadata(BaseModel):
     subject_id_variable: Optional[str]
     subject_id_variable_as_the_pk: bool = True
     messy_subject_id: bool = False
-    dictionary: Optional[Dict] = None
+    dictionary: Optional[List[Dict[str, Any]]] = Field(
+        repr=False,
+        default=None
+    )
 
 
 class RedcapDataSource(BaseModel):
@@ -98,6 +101,7 @@ class RedcapDataSource(BaseModel):
                     ],
                     optional_variables_dictionary=optional_variables,
                     main_redcap=row["data_source_metadata"]["main_redcap"],
+                    dictionary=row["data_source_metadata"].get("dictionary")
                 ),
             )
             return redcap_data_source
@@ -139,11 +143,11 @@ class RedcapDataSource(BaseModel):
             '{value_json}'::jsonb
         )
         WHERE project_id = '{project_id}'
-          AND site_id = '{site_id}'
-          AND data_source_type = 'redcap'
+            AND site_id = '{site_id}'
+            AND data_source_type = 'redcap'
         """
 
         engine = get_db_connection(config_file=config_file)
         with engine.begin() as conn:
-            cur = conn.connection.cursor()
+            cur = conn.connection.cursor()  # type: ignore
             cur.execute(sql_query)
