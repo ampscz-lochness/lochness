@@ -25,11 +25,11 @@ try:
 except ValueError:
     pass
 
+import json
 import logging
 from typing import Any, Dict, List, Optional, cast, Set
 
 import pandas as pd
-import requests
 from rich.logging import RichHandler
 
 from lochness.helpers import logs, utils, db
@@ -37,6 +37,8 @@ from lochness.models.subjects import Subject
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
 from lochness.sources.redcap.models.data_source import RedcapDataSource
+from lochness.sources.redcap import api
+from lochness.sources.redcap.api import RedcapAPIError
 
 MODULE_NAME = "lochness.sources.redcap.tasks.refresh_metadata"
 
@@ -181,16 +183,6 @@ def fetch_metadata(
         redcap_data_source.data_source_metadata.optional_variables_dictionary
     )
 
-    data = {
-        "token": api_token,
-        "content": "record",
-        "action": "export",
-        "format": "json",
-        "type": "flat",
-        "csvDelimiter": "",
-        "returnFormat": "json",
-    }
-
     requested_variables = [subject_id_variable]
     required_variables: Set[str] = set()
 
@@ -212,17 +204,20 @@ def fetch_metadata(
         if variable_name not in requested_variables:
             requested_variables.append(variable_name)
 
-    for i, variable in enumerate(requested_variables):
-        data[f"fields[{i}]"] = variable  # type: ignore
-
-    r = requests.post(redcap_endpoint_url, data=data, timeout=timeout_s)
-    if r.status_code != 200:
+    try:
+        raw_content = api.export_records(
+            endpoint_url=redcap_endpoint_url,
+            api_token=api_token,
+            fields=requested_variables,  # type: ignore[arg-type]
+            timeout_s=timeout_s,
+        )
+    except RedcapAPIError as e:
         logger.error(
-            f"Failed to fetch metadata for {identifier}: {r.status_code} - {r.text}"
+            f"Failed to fetch metadata for {identifier}: {e}"
         )
         return None
 
-    raw_data = r.json()
+    raw_data = json.loads(raw_content)
 
     results: List[Dict[str, str]] = []
     for record in raw_data:
@@ -308,7 +303,7 @@ def insert_metadata(
     """
     subjects: List[Subject] = []
 
-    for idx, row in df.iterrows():  # type: ignore
+    for _, row in df.iterrows():  # type: ignore
         subject_id = row["subject_id"]
 
         subject_metadata: Dict[str, Any] = cast(

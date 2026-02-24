@@ -29,13 +29,14 @@ except ValueError:
 import logging
 from typing import Any, Dict, Optional
 
-import requests
 from rich.logging import RichHandler
 
 from lochness.helpers import logs, utils
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
 from lochness.sources.redcap.models.data_source import RedcapDataSource
+from lochness.sources.redcap import api
+from lochness.sources.redcap.api import RedcapAPIError
 
 MODULE_NAME = "lochness.sources.redcap.tasks.pull_dictionary"
 
@@ -148,21 +149,17 @@ def fetch_dictionary(
 
     api_token = keystore.key_value
 
-    data = {
-        "token": api_token,
-        "content": "metadata",
-        "format": "json",
-        "returnFormat": "json",
-    }
-
-    r = requests.post(redcap_endpoint_url, data=data, timeout=timeout_s)
-    if r.status_code != 200:
+    try:
+        raw_data = api.export_data_dictionary(
+            endpoint_url=redcap_endpoint_url,
+            api_token=api_token,
+            timeout_s=timeout_s,
+        )
+    except RedcapAPIError as e:
         logger.error(
-            f"Failed to fetch metadata for {identifier}: {r.status_code} - {r.text}"
+            f"Failed to fetch data dictionary for {identifier}: {e}"
         )
         return None
-
-    raw_data = r.json()
 
     if redcap_data_source.data_source_metadata.dictionary is None:
         Logs(
