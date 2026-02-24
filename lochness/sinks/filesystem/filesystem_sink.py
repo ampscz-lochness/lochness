@@ -80,13 +80,11 @@ class FilesystemSink(DataSinkI):
 
         # Add SSH options if key path is provided
         if ssh_key_path:
-            ssh_options = (
-                f"-e 'ssh -i {ssh_key_path} -p {ssh_port} -o StrictHostKeyChecking=no'"
+            command.extend(
+                ["-e", f"ssh -i {ssh_key_path} -p {ssh_port} -o StrictHostKeyChecking=no"]
             )
-            command.append(ssh_options)
         elif ssh_port != 22:
-            ssh_options = f"-e 'ssh -p {ssh_port} -o StrictHostKeyChecking=no'"
-            command.append(ssh_options)
+            command.extend(["-e", f"ssh -p {ssh_port} -o StrictHostKeyChecking=no"])
 
         command.extend([str(source_path), destination])
 
@@ -111,8 +109,8 @@ class FilesystemSink(DataSinkI):
         logger.debug(f"Executing rsync command: {' '.join(command)}")
 
         result = subprocess.run(
-            " ".join(command),
-            shell=True,
+            command,
+            shell=False,
             capture_output=True,
             text=True,
             check=False,
