@@ -191,32 +191,39 @@ class FilesystemSink(DataSinkI):
             )
             raise ValueError("Missing destination_path in filesystem credentials.")
 
-        # Build the destination directory structure
-        project_name_cap = (
-            self.data_sink.project_id[:1].upper()
-            + self.data_sink.project_id[1:].lower()
-        )
-
-        relative_path = (
-            f"{project_name_cap}/PHOENIX/PROTECTED/"
-            f"{project_name_cap}{self.data_sink.site_id}/raw/"
-            f"{push_metadata.get('subject_id', 'unknown')}/"
-            f"{push_metadata.get('modality', 'unknown')}/"
-        )
+        # Build the destination directory structure.
+        # Use the pre-computed relative path when available (preserves nested
+        # PHOENIX directory structure, e.g. REDCap assets/ subdirectories).
+        # Fall back to constructing the path from individual metadata fields.
+        if push_metadata.get("relative_path"):
+            # relative_path already includes the filename
+            object_name = push_metadata["relative_path"]
+            # Destination directory is the parent of the full relative path
+            dest_relative_dir = str(Path(object_name).parent)
+        else:
+            project_name_cap = (
+                self.data_sink.project_id[:1].upper()
+                + self.data_sink.project_id[1:].lower()
+            )
+            dest_relative_dir = (
+                f"{project_name_cap}/PHOENIX/PROTECTED/"
+                f"{project_name_cap}{self.data_sink.site_id}/raw/"
+                f"{push_metadata.get('subject_id', 'unknown')}/"
+                f"{push_metadata.get('modality', 'unknown')}/"
+            )
+            object_name = f"{dest_relative_dir}{file_to_push.name}"
 
         # Construct full destination path
         if ssh_host and ssh_user:
             # Remote destination via SSH
             full_destination = (
-                f"{ssh_user}@{ssh_host}:{destination_path}/{relative_path}"
+                f"{ssh_user}@{ssh_host}:{destination_path}/{dest_relative_dir}"
             )
         else:
             # Local destination
-            full_destination_path = Path(destination_path) / relative_path
+            full_destination_path = Path(destination_path) / dest_relative_dir
             full_destination_path.mkdir(parents=True, exist_ok=True)
             full_destination = str(full_destination_path)
-
-        object_name = f"{relative_path}{file_to_push.name}"
 
         try:
             with Timer() as timer:

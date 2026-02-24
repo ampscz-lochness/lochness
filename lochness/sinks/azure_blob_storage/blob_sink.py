@@ -95,18 +95,24 @@ class AzureBlobSink(DataSinkI):
             )
             raise ValueError(f"Azure Blob Storage container '{container_name}' does not exist.")
 
-        project_name_cap = (
-            self.data_sink.project_id[:1].upper()
-            + self.data_sink.project_id[1:].lower()
-        )
-
-        object_name = (
-            f"{project_name_cap}/PHOENIX/PROTECTED/"
-            f"{project_name_cap}{self.data_sink.site_id}/raw/"
-            f"{push_metadata.get('subject_id', 'unknown')}/"
-            f"{push_metadata.get('modality', 'unknown')}/"
-            f"{file_to_push.name}"
-        )
+        # Use the pre-computed relative path when available (preserves nested
+        # PHOENIX directory structure, e.g. REDCap assets/ subdirectories).
+        # Fall back to constructing the path from individual metadata fields.
+        object_name: str
+        if push_metadata.get("relative_path"):
+            object_name = push_metadata["relative_path"]
+        else:
+            project_name_cap = (
+                self.data_sink.project_id[:1].upper()
+                + self.data_sink.project_id[1:].lower()
+            )
+            object_name = (
+                f"{project_name_cap}/PHOENIX/PROTECTED/"
+                f"{project_name_cap}{self.data_sink.site_id}/raw/"
+                f"{push_metadata.get('subject_id', 'unknown')}/"
+                f"{push_metadata.get('modality', 'unknown')}/"
+                f"{file_to_push.name}"
+            )
         file_md5 = hash_helper.compute_fingerprint(file_to_push)
 
         try:

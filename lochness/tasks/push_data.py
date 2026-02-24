@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from rich.logging import RichHandler
 
-from lochness.helpers import db, fs, logs, utils
+from lochness.helpers import config, db, fs, logs, utils
 from lochness.models.data_pulls import DataPull
 from lochness.models.data_push import DataPush
 from lochness.models.data_sinks import DataSink
@@ -342,19 +342,32 @@ def push_file_to_sink(
         if data_sink_i is None:
             raise ModuleNotFoundError
 
+        # Compute the relative path from lochness_root so sinks preserve
+        # the full PHOENIX directory structure (e.g. nested assets/ paths from
+        # REDCap file attachments like surveys/assets/{source}/{event}/{form}/{file})
+        push_metadata: Dict[str, Any] = {
+            "data_source_name": data_source_name,
+            "subject_id": subject_id,
+            "site_id": site_id,
+            "project_id": project_id,
+            "file_name": file_obj.file_name,
+            "file_size_mb": file_obj.file_size_mb,  # type: ignore
+            "modality": modality,
+        }
+        try:
+            lochness_root = config.parse(config_file, "general")["lochness_root"]
+            push_metadata["relative_path"] = str(
+                file_obj.file_path.relative_to(lochness_root)  # type: ignore
+            )
+        except (ValueError, KeyError):
+            # Fall back gracefully: sinks will construct the path from metadata
+            pass
+
         start_time = datetime.now()
         data_push: DataPush = data_sink_i.push(
             file_to_push=actual_file_path,
             config_file=config_file,
-            push_metadata={
-                "data_source_name": data_source_name,
-                "subject_id": subject_id,
-                "site_id": site_id,
-                "project_id": project_id,
-                "file_name": file_obj.file_name,
-                "file_size_mb": file_obj.file_size_mb,  # type: ignore
-                "modality": modality,
-            },
+            push_metadata=push_metadata,
         )
         end_time = datetime.now()
         push_time_s = int((end_time - start_time).total_seconds())
