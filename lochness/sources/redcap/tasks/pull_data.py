@@ -609,7 +609,7 @@ def pull_file_attachments(
                 project_id=project_id,
                 file_path=str(file_path),
                 file_md5=file_md5,
-                pull_time_s=file_pull_timer.duration,  # type: ignore
+                pull_time_s=int(file_pull_timer.duration),  # type: ignore
                 pull_metadata={
                     "redcap_endpoint": endpoint_url,
                     "field_name": field_name,
