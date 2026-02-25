@@ -75,9 +75,11 @@ class FilesystemSink(DataSinkI):
             "--chmod=D775,F644",  # set directories to 775, files to 644
         ]
 
-        # Add remote rsync path if specified
-        if remote_rsync_bin_path:
-            command.append(f"--rsync-path={remote_rsync_bin_path}")
+        # Set umask 002 on the remote side so that directories created by
+        # --mkpath get group-write (775).  --mkpath-created directories are
+        # not part of the file list, so --chmod has no effect on them
+        rsync_bin = remote_rsync_bin_path or "rsync"
+        command.append(f"--rsync-path=umask 002 && {rsync_bin}")
 
         # Add SSH options if key path is provided
         if ssh_key_path:
