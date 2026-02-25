@@ -43,6 +43,7 @@ from lochness.models.data_pulls import DataPull
 from lochness.sources.redcap.models.data_source import RedcapDataSource
 
 MODULE_NAME = "lochness.sources.redcap.tasks.pull_data"
+NOISY_MODULES = ["urllib3.connectionpool"]
 
 console = utils.get_console()
 
@@ -829,7 +830,9 @@ def pull_all_data(
                             "redcap_endpoint": redcap_data_source.data_source_metadata.endpoint_url,
                             "records_pulled_bytes": len(raw_data),
                             "file_attachments_downloaded": files_downloaded,
-                            "relative_path": str(file_path.relative_to(lochness_root_path)),
+                            "relative_path": str(
+                                file_path.relative_to(lochness_root_path)
+                            ),
                         },
                     )
                     db.execute_queries(
@@ -859,7 +862,10 @@ if __name__ == "__main__":
         sys.exit(1)
 
     logs.configure_logging(
-        config_file=config_file, module_name=MODULE_NAME, logger=logger
+        config_file=config_file,
+        module_name=MODULE_NAME,
+        logger=logger,
+        noisy_modules=NOISY_MODULES,
     )
 
     logger.info("Starting REDCap data pull...")
