@@ -621,6 +621,7 @@ def pull_file_attachments(
                     "record_id": str(record_id),
                     "file_size_bytes": len(file_content),
                     "type": "file_attachment",
+                    "relative_path": str(file_path.relative_to(lochness_root)),
                 },
             )
 
@@ -813,6 +814,9 @@ def pull_all_data(
                             config_file=config_file,
                         )
 
+                    lochness_root_path: Path = Path(
+                        config.parse(config_file, "general")["lochness_root"]  # type: ignore
+                    )
                     data_pull = DataPull(
                         subject_id=subject.subject_id,
                         data_source_name=redcap_data_source.data_source_name,
@@ -825,6 +829,7 @@ def pull_all_data(
                             "redcap_endpoint": redcap_data_source.data_source_metadata.endpoint_url,
                             "records_pulled_bytes": len(raw_data),
                             "file_attachments_downloaded": files_downloaded,
+                            "relative_path": str(file_path.relative_to(lochness_root_path)),
                         },
                     )
                     db.execute_queries(

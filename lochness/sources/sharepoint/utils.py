@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import requests
 
-from lochness.helpers import db
+from lochness.helpers import config, db
 from lochness.models.data_pulls import DataPull
 from lochness.models.files import File
 from lochness.models.logs import Logs
@@ -418,6 +418,7 @@ def download_subdirectory(
                 end_time = datetime.now()
                 pull_time_s = int((end_time - start_time).total_seconds())
 
+                lochness_root: str = config.parse(config_file, "general")["lochness_root"]  # type: ignore
                 data_pull = DataPull(
                     subject_id=subject_id,
                     data_source_name=data_source_name,
@@ -426,7 +427,10 @@ def download_subdirectory(
                     file_path=str(file_target_path),
                     file_md5=file_md5,
                     pull_time_s=pull_time_s,
-                    pull_metadata={"quickxorhash": quick_xor_hash},
+                    pull_metadata={
+                        "quickxorhash": quick_xor_hash,
+                        "relative_path": str(file_target_path.relative_to(lochness_root)),
+                    },
                 )
 
                 queries = (

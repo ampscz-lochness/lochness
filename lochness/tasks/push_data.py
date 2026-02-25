@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from rich.logging import RichHandler
 
-from lochness.helpers import config, db, fs, logs, utils
+from lochness.helpers import db, fs, logs, utils
 from lochness.models.data_pulls import DataPull
 from lochness.models.data_push import DataPush
 from lochness.models.data_sinks import DataSink
@@ -296,6 +296,7 @@ def push_file_to_sink(
     subject_id: str,
     config_file: Path,
     source_file_path: Optional[Path] = None,
+    relative_path: Optional[str] = None,
 ) -> bool:
     """
     Dispatches the file push to the appropriate sink-specific handler.
@@ -314,6 +315,9 @@ def push_file_to_sink(
         source_file_path: Optional path to use as source file. If None,
             uses file_obj.file_path. This allows pushing from a temporary
             file pulled from another data sink.
+        relative_path: Optional relative path (from lochness_root) recorded
+            at pull time. When provided, sinks use it to preserve the full
+            PHOENIX directory structure (e.g. nested assets/ paths).
     """
     # Use provided source path or fall back to file_obj.file_path
     actual_file_path = source_file_path if source_file_path else file_obj.file_path
@@ -342,9 +346,9 @@ def push_file_to_sink(
         if data_sink_i is None:
             raise ModuleNotFoundError
 
-        # Compute the relative path from lochness_root so sinks preserve
-        # the full PHOENIX directory structure (e.g. nested assets/ paths from
-        # REDCap file attachments like surveys/assets/{source}/{event}/{form}/{file})
+        # Build push metadata, including the relative_path recorded at pull
+        # time so sinks preserve the full PHOENIX directory structure
+        # (e.g. nested assets/ paths from REDCap file attachments)
         push_metadata: Dict[str, Any] = {
             "data_source_name": data_source_name,
             "subject_id": subject_id,
@@ -354,14 +358,8 @@ def push_file_to_sink(
             "file_size_mb": file_obj.file_size_mb,  # type: ignore
             "modality": modality,
         }
-        try:
-            lochness_root = config.parse(config_file, "general")["lochness_root"]
-            push_metadata["relative_path"] = str(
-                file_obj.file_path.relative_to(lochness_root)  # type: ignore
-            )
-        except (ValueError, KeyError):
-            # Fall back gracefully: sinks will construct the path from metadata
-            pass
+        if relative_path:
+            push_metadata["relative_path"] = relative_path
 
         start_time = datetime.now()
         data_push: DataPush = data_sink_i.push(
@@ -530,6 +528,7 @@ def simple_push_file_to_sink(file_path: Path):
         site_id=data_pull.site_id,
         subject_id=data_pull.subject_id,
         config_file=config_file,
+        relative_path=data_pull.pull_metadata.get("relative_path"),
     )
     return result
 
@@ -786,6 +785,11 @@ def push_all_data(
                     subject_id=subject_id,
                     config_file=config_file,
                     source_file_path=source_file_path,
+                    relative_path=(
+                        associated_data_pull.pull_metadata.get("relative_path")
+                        if associated_data_pull
+                        else None
+                    ),
                 )
             finally:
                 # Clean up temporary file if we pulled from remote

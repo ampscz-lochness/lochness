@@ -635,6 +635,7 @@ def pull_all_data(config_file: Path, project_id: str = None, site_id: str = None
                     end_time = datetime.now()
                     pull_time_s = int((end_time - start_time).total_seconds())
 
+                    lochness_root_str = str(config.parse(config_file, 'general')['lochness_root'])
                     data_pull = DataPull(
                         subject_id=subject.subject_id,
                         data_source_name=xnat_data_source.data_source_name,
@@ -646,6 +647,7 @@ def pull_all_data(config_file: Path, project_id: str = None, site_id: str = None
                         pull_metadata={
                             "xnat_endpoint": xnat_data_source.data_source_metadata.endpoint_url,
                             "records_pulled_bytes": len(raw_data),
+                            "relative_path": str(file_path.relative_to(lochness_root_str)),
                         },
                     )
                     db.execute_queries(config_file, [data_pull.to_sql_query()], show_commands=False)

@@ -228,6 +228,8 @@ def fetch_subject_data_for_date(
 
     identifier = f"{project_id}::{site_id}::{data_source_name}::{subject_id}"
 
+    lochness_root: str = config.parse(config_file, "general")["lochness_root"]  # type: ignore
+
     mindlamp_api.connect_to_mindlamp(mindlamp_data_source, config_file)
 
     dt_in_utc = datetime_dt.astimezone(pytz.timezone("UTC"))
@@ -278,6 +280,7 @@ def fetch_subject_data_for_date(
                 "mindlamp_id": mindlamp_id,
                 "mindlamp_data_type": "sensor",
                 "data_date_utc": date_utc,
+                "relative_path": str(sensor_file_path.relative_to(lochness_root)),
             },
         )
         data_pulls.append(sensor_data_pull)
@@ -318,6 +321,7 @@ def fetch_subject_data_for_date(
                 "mindlamp_id": mindlamp_id,
                 "mindlamp_data_type": "activity",
                 "data_date_utc": date_utc,
+                "relative_path": str(activity_file_path.relative_to(lochness_root)),
             },
         )
         data_pulls.append(activity_data_pull)
@@ -340,6 +344,7 @@ def fetch_subject_data_for_date(
                     "mindlamp_id": mindlamp_id,
                     "mindlamp_data_type": "audio_journals",
                     "data_date_utc": date_utc,
+                    "relative_path": str(audio_file.relative_to(lochness_root)),
                 },
             )
             data_pulls.append(audio_data_pull)
