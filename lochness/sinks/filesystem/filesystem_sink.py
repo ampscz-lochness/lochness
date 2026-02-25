@@ -217,13 +217,13 @@ class FilesystemSink(DataSinkI):
         if ssh_host and ssh_user:
             # Remote destination via SSH
             full_destination = (
-                f"{ssh_user}@{ssh_host}:{destination_path}/{dest_relative_dir}"
+                f"{ssh_user}@{ssh_host}:{destination_path}/{dest_relative_dir}/"
             )
         else:
             # Local destination
             full_destination_path = Path(destination_path) / dest_relative_dir
             full_destination_path.mkdir(parents=True, exist_ok=True)
-            full_destination = str(full_destination_path)
+            full_destination = str(full_destination_path) + "/"
 
         try:
             with Timer() as timer:
