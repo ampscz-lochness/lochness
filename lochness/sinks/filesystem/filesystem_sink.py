@@ -72,21 +72,22 @@ class FilesystemSink(DataSinkI):
             "--progress",
             "--partial",  # keep partially transferred files
             "--timeout=300",  # 5 minute timeout
+            "--chmod=D775,F644",  # set directories to 775, files to 644
         ]
 
-        # Add remote rsync path if specified
-        if remote_rsync_bin_path:
-            command.append(f"--rsync-path={remote_rsync_bin_path}")
+        # Set umask 002 on the remote side so that directories created by
+        # --mkpath get group-write (775).  --mkpath-created directories are
+        # not part of the file list, so --chmod has no effect on them
+        rsync_bin = remote_rsync_bin_path or "rsync"
+        command.append(f"--rsync-path=umask 002 && {rsync_bin}")
 
         # Add SSH options if key path is provided
         if ssh_key_path:
-            ssh_options = (
-                f"-e 'ssh -i {ssh_key_path} -p {ssh_port} -o StrictHostKeyChecking=no'"
+            command.extend(
+                ["-e", f"ssh -i {ssh_key_path} -p {ssh_port} -o StrictHostKeyChecking=no"]
             )
-            command.append(ssh_options)
         elif ssh_port != 22:
-            ssh_options = f"-e 'ssh -p {ssh_port} -o StrictHostKeyChecking=no'"
-            command.append(ssh_options)
+            command.extend(["-e", f"ssh -p {ssh_port} -o StrictHostKeyChecking=no"])
 
         command.extend([str(source_path), destination])
 
@@ -111,8 +112,8 @@ class FilesystemSink(DataSinkI):
         logger.debug(f"Executing rsync command: {' '.join(command)}")
 
         result = subprocess.run(
-            " ".join(command),
-            shell=True,
+            command,
+            shell=False,
             capture_output=True,
             text=True,
             check=False,
@@ -193,32 +194,39 @@ class FilesystemSink(DataSinkI):
             )
             raise ValueError("Missing destination_path in filesystem credentials.")
 
-        # Build the destination directory structure
-        project_name_cap = (
-            self.data_sink.project_id[:1].upper()
-            + self.data_sink.project_id[1:].lower()
-        )
-
-        relative_path = (
-            f"{project_name_cap}/PHOENIX/PROTECTED/"
-            f"{project_name_cap}{self.data_sink.site_id}/raw/"
-            f"{push_metadata.get('subject_id', 'unknown')}/"
-            f"{push_metadata.get('modality', 'unknown')}/"
-        )
+        # Build the destination directory structure.
+        # Use the pre-computed relative path when available (preserves nested
+        # PHOENIX directory structure, e.g. REDCap assets/ subdirectories).
+        # Fall back to constructing the path from individual metadata fields.
+        if push_metadata.get("relative_path"):
+            # relative_path already includes the filename
+            object_name = push_metadata["relative_path"]
+            # Destination directory is the parent of the full relative path
+            dest_relative_dir = str(Path(object_name).parent)
+        else:
+            project_name_cap = (
+                self.data_sink.project_id[:1].upper()
+                + self.data_sink.project_id[1:].lower()
+            )
+            dest_relative_dir = (
+                f"{project_name_cap}/PHOENIX/PROTECTED/"
+                f"{project_name_cap}{self.data_sink.site_id}/raw/"
+                f"{push_metadata.get('subject_id', 'unknown')}/"
+                f"{push_metadata.get('modality', 'unknown')}/"
+            )
+            object_name = f"{dest_relative_dir}{file_to_push.name}"
 
         # Construct full destination path
         if ssh_host and ssh_user:
             # Remote destination via SSH
             full_destination = (
-                f"{ssh_user}@{ssh_host}:{destination_path}/{relative_path}"
+                f"{ssh_user}@{ssh_host}:{destination_path}/{dest_relative_dir}/"
             )
         else:
             # Local destination
-            full_destination_path = Path(destination_path) / relative_path
+            full_destination_path = Path(destination_path) / dest_relative_dir
             full_destination_path.mkdir(parents=True, exist_ok=True)
-            full_destination = str(full_destination_path)
-
-        object_name = f"{relative_path}{file_to_push.name}"
+            full_destination = str(full_destination_path) + "/"
 
         try:
             with Timer() as timer:

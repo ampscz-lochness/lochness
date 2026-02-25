@@ -25,14 +25,16 @@ except ValueError:
     pass
 
 import argparse
+import json
 import logging
+import re
 from typing import Any, List, Dict, Optional
 from datetime import datetime
 
 import requests
 from rich.logging import RichHandler
 
-from lochness.helpers import logs, utils, db, config
+from lochness.helpers import logs, utils, db, config, timer
 from lochness.models.subjects import Subject
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
@@ -41,6 +43,7 @@ from lochness.models.data_pulls import DataPull
 from lochness.sources.redcap.models.data_source import RedcapDataSource
 
 MODULE_NAME = "lochness.sources.redcap.tasks.pull_data"
+NOISY_MODULES = ["urllib3.connectionpool"]
 
 console = utils.get_console()
 
@@ -214,7 +217,9 @@ def fetch_subject_data(
 
         if redcap_data_source.data_source_metadata.messy_subject_id:
             filter_logic = add_filter_logic_for_penncnb_redcap(
-                filter_logic, subject_id, subject_id_var  # type: ignore
+                filter_logic,
+                subject_id,
+                subject_id_var,  # type: ignore
             )
 
         data = {
@@ -248,9 +253,7 @@ def fetch_subject_data(
                 site_id=site_id,
                 data_source_name=data_source_name,
                 subject_id=subject_id,
-                extra={
-                    "filter_logic": filter_logic
-                }
+                extra={"filter_logic": filter_logic},
             )
 
             logger.warning(f"No data found for {identifier}")
@@ -324,8 +327,8 @@ def save_subject_data(
         output_dir.mkdir(parents=True, exist_ok=True)
         file_name = f"{subject_id}.{project_name_cap}.{data_source_name}.json"
         file_path = output_dir / file_name
-        with open(file_path, "wb") as f:
-            f.write(data)
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(json.loads(data), f, indent=4)
         # Record the file in the database
         file_model = File(
             file_path=file_path,
@@ -345,7 +348,10 @@ def save_subject_data(
             site_id=site_id,
             data_source_name=data_source_name,
             subject_id=subject_id,
-            extra={"file_path": str(file_path), "file_md5": file_md5 if file_md5 else None},
+            extra={
+                "file_path": str(file_path),
+                "file_md5": file_md5 if file_md5 else None,
+            },
         )
         return file_path, file_md5 if file_md5 else ""
     except Exception as e:  # pylint: disable=broad-except
@@ -362,6 +368,292 @@ def save_subject_data(
             extra={"error": str(e)},
         )
         return None
+
+
+def get_file_fields_from_dictionary(
+    redcap_data_source: RedcapDataSource,
+) -> Dict[str, str]:
+    """
+    Identifies file upload fields from the REDCap data dictionary stored in
+    the database.  Returns a mapping of field_name : form_name.
+
+    Args:
+        redcap_data_source (RedcapDataSource): The REDCap data source.
+
+    Returns:
+        Dict[str, str]: Mapping of field_name → form_name for every file
+            upload field.  Empty dict when no dictionary is available or
+            no file fields exist.
+    """
+
+    data_dictionary: Optional[List[Dict[str, str]]] = (
+        redcap_data_source.data_source_metadata.dictionary
+    )
+
+    if data_dictionary is None:
+        logger.warning(
+            f"No data dictionary found in metadata for {redcap_data_source.data_source_name}. "
+            "Run pull_dictionary first."
+        )
+        return {}
+
+    # field_name: form_name for every file field
+    file_fields: Dict[str, str] = {
+        entry["field_name"]: entry.get("form_name", "unknown_form")
+        for entry in data_dictionary
+        if entry.get("field_type") == "file"
+    }
+
+    return file_fields
+
+
+def fetch_file_attachment(
+    endpoint_url: str,
+    api_token: str,
+    record_id: str,
+    field_name: str,
+    event_name: Optional[str] = None,
+    repeat_instance: Optional[str] = None,
+    timeout_s: int = 60,
+) -> Optional[tuple[bytes, str]]:
+    """
+    Downloads a single file from a REDCap file upload field.
+
+    Args:
+        endpoint_url (str): The REDCap API endpoint URL.
+        api_token (str): The API token for authentication.
+        record_id (str): The record ID (primary key) in REDCap.
+        field_name (str): The field name of the file upload field.
+        event_name (Optional[str]): The event name (for longitudinal projects).
+        repeat_instance (Optional[str]): The repeat instance number.
+        timeout_s (int): Timeout for the API request.
+
+    Returns:
+        Optional[tuple[bytes, str]]: A tuple of (file_content, original_filename),
+            or None if the download fails.
+    """
+    data: Dict[str, str] = {
+        "token": api_token,
+        "content": "file",
+        "action": "export",
+        "record": record_id,
+        "field": field_name,
+        "returnFormat": "json",
+    }
+    if event_name:
+        data["event"] = event_name
+    if repeat_instance:
+        data["repeat_instance"] = repeat_instance
+
+    try:
+        r = requests.post(endpoint_url, data=data, timeout=timeout_s)
+        r.raise_for_status()
+
+        # REDCap returns the filename in the Content-Type header as:
+        #   application/pdf; name="filename.pdf"
+        filename: Optional[str] = None
+        content_type = r.headers.get("Content-Type", "")
+        name_match = re.search(r'name="([^"]+)"', content_type)
+        if name_match:
+            filename = name_match.group(1)
+
+        if not filename:
+            filename = f"{field_name}_file"
+
+        return r.content, filename
+    except requests.exceptions.RequestException as e:
+        logger.error(
+            f"Failed to download file for record={record_id}, field={field_name}: {e}"
+        )
+        return None
+
+
+def pull_file_attachments(
+    redcap_data_source: RedcapDataSource,
+    subject_id: str,
+    subject_data_json: Path,
+    file_fields: Dict[str, str],
+    config_file: Path,
+) -> int:
+    """
+    Parses the pulled JSON data, identifies file upload fields with values,
+    downloads the actual files from REDCap, and saves them under
+    surveys/assets/{data_source_name}/{event}/{form}/{filename}.
+
+    If the repeat instance is not 1 (or missing), ``_{instance}`` is appended
+    to the stem of the downloaded filename.
+
+    Args:
+        redcap_data_source (RedcapDataSource): The REDCap data source.
+        subject_id (str): The subject ID.
+        raw_data (bytes): The raw JSON data previously fetched for this subject.
+        file_fields (Dict[str, str]): Mapping of field_name: form_name for
+            every file upload field.
+        config_file (Path): Path to the config file.
+
+    Returns:
+        int: The number of files successfully downloaded.
+    """
+    project_id = redcap_data_source.project_id
+    site_id = redcap_data_source.site_id
+    data_source_name = redcap_data_source.data_source_name
+    identifier = f"{project_id}::{site_id}::{data_source_name}::{subject_id}"
+
+    # Parse JSON data
+    try:
+        with open(subject_data_json, "r", encoding="utf-8") as f:
+            records = json.load(f)
+    except (json.JSONDecodeError, ValueError, FileNotFoundError) as e:
+        logger.error(
+            f"Failed to parse JSON data for file attachments: {identifier}, error: {e}"
+        )
+        return 0
+
+    if not records:
+        return 0
+
+    keystore = KeyStore.retrieve_keystore(
+        redcap_data_source.data_source_metadata.keystore_name,
+        project_id,
+        config_file,
+    )
+    if keystore is None:
+        logger.error(f"Keystore not found for file attachment download: {identifier}")
+        return 0
+
+    api_token = keystore.key_value
+    endpoint_url = redcap_data_source.data_source_metadata.endpoint_url
+
+    # Build output base path
+    lochness_root: Path = config.parse(config_file, "general")["lochness_root"]  # type: ignore
+    project_name_cap = (
+        project_id[:1].upper() + project_id[1:].lower() if project_id else project_id
+    )
+    assets_base = (
+        Path(lochness_root)
+        / project_name_cap
+        / "PHOENIX"
+        / "PROTECTED"
+        / f"{project_name_cap}{site_id}"
+        / "raw"
+        / subject_id
+        / "surveys"
+        / "assets"
+        / data_source_name
+    )
+
+    files_downloaded = 0
+
+    for record in records:
+        # Determine the record_id for the API call
+        if redcap_data_source.data_source_metadata.subject_id_variable_as_the_pk:
+            record_id = subject_id
+        else:
+            # The first field in the record is always the record_id in REDCap
+            first_field = list(record.keys())[0]
+            record_id = str(record.get(first_field, subject_id))
+
+        event_name = record.get("redcap_event_name")
+        repeat_instance = record.get("redcap_repeat_instance")
+
+        for field_name, form_name in file_fields.items():
+            file_value = record.get(field_name, "")
+            if not file_value:
+                continue
+
+            # Download the file
+            with timer.Timer() as file_pull_timer:
+                result = fetch_file_attachment(
+                    endpoint_url=endpoint_url,
+                    api_token=api_token,
+                    record_id=str(record_id),
+                    field_name=field_name,
+                    event_name=event_name,
+                    repeat_instance=(str(repeat_instance) if repeat_instance else None),
+                )
+
+            if result is None:
+                continue
+
+            file_content, original_filename = result
+
+            # Build path: .../assets/{data_source_name}/{event}/{form}/{file}
+            output_dir = assets_base
+            if event_name:
+                output_dir = output_dir / event_name
+            output_dir = output_dir / form_name
+
+            # Append _{instance} to the filename when instance is not 1
+            fname = Path(original_filename)
+            if (
+                repeat_instance is not None
+                and str(repeat_instance) != ""
+                and str(repeat_instance) != "1"
+            ):
+                original_filename = f"{fname.stem}_{repeat_instance}{fname.suffix}"
+
+            output_dir.mkdir(parents=True, exist_ok=True)
+            file_path = output_dir / original_filename
+
+            with open(file_path, "wb") as f:
+                f.write(file_content)
+
+            # Track file in DB
+            file_model = File(file_path=file_path)
+            file_md5 = file_model.md5 or ""
+
+            # Record the data pull in DB
+            data_pull = DataPull(
+                subject_id=subject_id,
+                data_source_name=data_source_name,
+                site_id=site_id,
+                project_id=project_id,
+                file_path=str(file_path),
+                file_md5=file_md5,
+                pull_time_s=int(file_pull_timer.duration),  # type: ignore
+                pull_metadata={
+                    "redcap_endpoint": endpoint_url,
+                    "field_name": field_name,
+                    "form_name": form_name,
+                    "event_name": event_name,
+                    "repeat_instance": str(repeat_instance)
+                    if repeat_instance
+                    else None,
+                    "record_id": str(record_id),
+                    "file_size_bytes": len(file_content),
+                    "type": "file_attachment",
+                    "relative_path": str(file_path.relative_to(lochness_root)),
+                },
+            )
+
+            queries = file_model.to_sql_queries_with_availability_update() + [
+                data_pull.to_sql_query()
+            ]
+            db.execute_queries(
+                config_file,
+                queries,
+                show_commands=False,
+            )
+
+            files_downloaded += 1
+            logger.info(f"Downloaded file attachment: {file_path}")
+
+    if files_downloaded > 0:
+        log_event(
+            config_file=config_file,
+            log_level="INFO",
+            event="redcap_file_attachments_downloaded",
+            message=(
+                f"Downloaded {files_downloaded} file attachment(s) for {identifier}."
+            ),
+            project_id=project_id,
+            site_id=site_id,
+            data_source_name=data_source_name,
+            subject_id=subject_id,
+            extra={"files_downloaded": files_downloaded},
+        )
+
+    return files_downloaded
 
 
 def pull_all_data(
@@ -426,10 +718,15 @@ def pull_all_data(
     )
 
     for redcap_data_source in active_redcap_data_sources:
+        file_fields = get_file_fields_from_dictionary(redcap_data_source)
+        if file_fields:
+            logger.info(
+                f"Found {len(file_fields)} file upload field(s) for "
+                f"{redcap_data_source.data_source_name}: "
+                f"{list(file_fields.keys())}"
+            )
+
         # Get subjects for this data source
-        # For simplicity, let's assume we pull data for all subjects associated with
-        # this project/site
-        # In a real scenario, you might filter for new subjects or subjects with updated metadata
         subjects_in_db = Subject.get_subjects_for_project_site(
             project_id=redcap_data_source.project_id,
             site_id=redcap_data_source.site_id,
@@ -507,6 +804,20 @@ def pull_all_data(
                     end_time = datetime.now()
                     pull_time_s = int((end_time - start_time).total_seconds())
 
+                    # Pull file attachments if any file upload fields exist
+                    files_downloaded = 0
+                    if file_fields:
+                        files_downloaded = pull_file_attachments(
+                            redcap_data_source=redcap_data_source,
+                            subject_id=subject.subject_id,
+                            subject_data_json=file_path,
+                            file_fields=file_fields,
+                            config_file=config_file,
+                        )
+
+                    lochness_root_path: Path = Path(
+                        config.parse(config_file, "general")["lochness_root"]  # type: ignore
+                    )
                     data_pull = DataPull(
                         subject_id=subject.subject_id,
                         data_source_name=redcap_data_source.data_source_name,
@@ -518,6 +829,10 @@ def pull_all_data(
                         pull_metadata={
                             "redcap_endpoint": redcap_data_source.data_source_metadata.endpoint_url,
                             "records_pulled_bytes": len(raw_data),
+                            "file_attachments_downloaded": files_downloaded,
+                            "relative_path": str(
+                                file_path.relative_to(lochness_root_path)
+                            ),
                         },
                     )
                     db.execute_queries(
@@ -547,7 +862,10 @@ if __name__ == "__main__":
         sys.exit(1)
 
     logs.configure_logging(
-        config_file=config_file, module_name=MODULE_NAME, logger=logger
+        config_file=config_file,
+        module_name=MODULE_NAME,
+        logger=logger,
+        noisy_modules=NOISY_MODULES,
     )
 
     logger.info("Starting REDCap data pull...")

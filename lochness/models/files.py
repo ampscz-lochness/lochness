@@ -204,7 +204,7 @@ class File:
         SELECT *
         FROM data_pull
         WHERE file_path = '{f_path}'
-        ORDER BY pull_time_s DESC
+        ORDER BY pull_timestamp DESC
         LIMIT 1;
         """
 

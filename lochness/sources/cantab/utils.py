@@ -125,6 +125,7 @@ def pull_data_for_subject(
     data_file = File(file_path=data_file_path)
     associated_files.append(data_file)
 
+    lochness_root: str = config.parse(config_file, "general")["lochness_root"]  # type: ignore
     data_pull = DataPull(
         subject_id=subject.subject_id,
         project_id=data_source.project_id,
@@ -133,7 +134,10 @@ def pull_data_for_subject(
         file_path=str(data_file_path),
         file_md5=data_file.md5,  # type: ignore
         pull_time_s=int(timer.duration),  # type: ignore
-        pull_metadata={"cantab_id": subject_cantab_id},
+        pull_metadata={
+            "cantab_id": subject_cantab_id,
+            "relative_path": str(data_file_path.relative_to(lochness_root)),
+        },
     )
     data_pulls.append(data_pull)
 

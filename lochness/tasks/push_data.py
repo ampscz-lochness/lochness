@@ -296,6 +296,7 @@ def push_file_to_sink(
     subject_id: str,
     config_file: Path,
     source_file_path: Optional[Path] = None,
+    relative_path: Optional[str] = None,
 ) -> bool:
     """
     Dispatches the file push to the appropriate sink-specific handler.
@@ -314,6 +315,9 @@ def push_file_to_sink(
         source_file_path: Optional path to use as source file. If None,
             uses file_obj.file_path. This allows pushing from a temporary
             file pulled from another data sink.
+        relative_path: Optional relative path (from lochness_root) recorded
+            at pull time. When provided, sinks use it to preserve the full
+            PHOENIX directory structure (e.g. nested assets/ paths).
     """
     # Use provided source path or fall back to file_obj.file_path
     actual_file_path = source_file_path if source_file_path else file_obj.file_path
@@ -342,19 +346,26 @@ def push_file_to_sink(
         if data_sink_i is None:
             raise ModuleNotFoundError
 
+        # Build push metadata, including the relative_path recorded at pull
+        # time so sinks preserve the full PHOENIX directory structure
+        # (e.g. nested assets/ paths from REDCap file attachments)
+        push_metadata: Dict[str, Any] = {
+            "data_source_name": data_source_name,
+            "subject_id": subject_id,
+            "site_id": site_id,
+            "project_id": project_id,
+            "file_name": file_obj.file_name,
+            "file_size_mb": file_obj.file_size_mb,  # type: ignore
+            "modality": modality,
+        }
+        if relative_path:
+            push_metadata["relative_path"] = relative_path
+
         start_time = datetime.now()
         data_push: DataPush = data_sink_i.push(
             file_to_push=actual_file_path,
             config_file=config_file,
-            push_metadata={
-                "data_source_name": data_source_name,
-                "subject_id": subject_id,
-                "site_id": site_id,
-                "project_id": project_id,
-                "file_name": file_obj.file_name,
-                "file_size_mb": file_obj.file_size_mb,  # type: ignore
-                "modality": modality,
-            },
+            push_metadata=push_metadata,
         )
         end_time = datetime.now()
         push_time_s = int((end_time - start_time).total_seconds())
@@ -517,6 +528,7 @@ def simple_push_file_to_sink(file_path: Path):
         site_id=data_pull.site_id,
         subject_id=data_pull.subject_id,
         config_file=config_file,
+        relative_path=data_pull.pull_metadata.get("relative_path"),
     )
     return result
 
@@ -773,6 +785,11 @@ def push_all_data(
                     subject_id=subject_id,
                     config_file=config_file,
                     source_file_path=source_file_path,
+                    relative_path=(
+                        associated_data_pull.pull_metadata.get("relative_path")
+                        if associated_data_pull
+                        else None
+                    ),
                 )
             finally:
                 # Clean up temporary file if we pulled from remote
