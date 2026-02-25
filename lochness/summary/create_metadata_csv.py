@@ -76,7 +76,7 @@ def get_legacy_metadata_csv_for_mindlamp(
 
 
 def write_legacy_metadata_csv_for_mindlamp(
-        config_file: Path = None,
+        config_file: Path,
         project_id: str = None,
         site_id: str = None
         ):
