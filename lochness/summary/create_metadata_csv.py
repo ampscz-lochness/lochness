@@ -51,8 +51,6 @@ def get_legacy_metadata_csv_for_mindlamp(
     if site_id is not None:
         query += f" AND s.site_id = '{site_id}'"
 
-    print(query)
-
     df = db.execute_sql(
         config_file,
         query,
@@ -110,8 +108,6 @@ def write_legacy_metadata_csv_for_mindlamp(
             / f"{project_name_cap}{site_id}_metadata.csv"
             )
 
-        print(project_site_df)
-        return
         project_site_df.to_csv(output_file, index=False)
         logger.info(f"Metadata for project {project_id} and site {site_id} "
                     f"written to {output_file}")
