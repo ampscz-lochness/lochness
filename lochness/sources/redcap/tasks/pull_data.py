@@ -326,8 +326,8 @@ def save_subject_data(
         output_dir.mkdir(parents=True, exist_ok=True)
         file_name = f"{subject_id}.{project_name_cap}.{data_source_name}.json"
         file_path = output_dir / file_name
-        with open(file_path, "wb") as f:
-            f.write(data)
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(json.loads(data), f, indent=4)
         # Record the file in the database
         file_model = File(
             file_path=file_path,
