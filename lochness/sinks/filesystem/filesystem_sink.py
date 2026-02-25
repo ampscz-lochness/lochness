@@ -73,7 +73,7 @@ class FilesystemSink(DataSinkI):
             "--partial",  # keep partially transferred files
             "--timeout=300",  # 5 minute timeout
             "--no-perms",  # do not preserve source permissions
-            "--chmod=D755,F644",  # set directories to 755, files to 644
+            "--chmod=D775,F644",  # set directories to 775, files to 644
         ]
 
         # Add remote rsync path if specified
