@@ -72,7 +72,6 @@ class FilesystemSink(DataSinkI):
             "--progress",
             "--partial",  # keep partially transferred files
             "--timeout=300",  # 5 minute timeout
-            "--no-perms",  # do not preserve source permissions
             "--chmod=D775,F644",  # set directories to 775, files to 644
         ]
 
