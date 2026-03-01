@@ -27,7 +27,7 @@ class DataPull(BaseModel):
         pull_metadata (Dict[str, Any]): Metadata associated with the data pull.
     """
 
-    subject_id: str
+    subject_id: Optional[str] = None
     data_source_name: str
     site_id: str
     project_id: str
@@ -44,7 +44,7 @@ class DataPull(BaseModel):
         sql_query = """
             CREATE TABLE IF NOT EXISTS data_pull (
                 data_pull_id SERIAL PRIMARY KEY,
-                subject_id TEXT NOT NULL,
+                subject_id TEXT,
                 data_source_name TEXT NOT NULL,
                 site_id TEXT NOT NULL,
                 project_id TEXT NOT NULL,
