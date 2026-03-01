@@ -322,10 +322,10 @@ class File:
             FROM files
             LEFT JOIN data_pull ON (
                 data_pull.file_path = files.file_path AND
-                data_pull.file_md5 = files.file_md5
+                data_pull.file_md5 = files.file_md5 AND
+                data_pull.project_id = '{project_id}' AND
+                data_pull.site_id = '{site_id}'
             )
-            WHERE data_pull.project_id = '{project_id}'
-                AND data_pull.site_id = '{site_id}'
         ) files
         LEFT JOIN data_push ON (
             data_push.file_path = files.file_path AND
