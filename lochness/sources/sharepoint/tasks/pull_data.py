@@ -33,6 +33,14 @@ from lochness.sources.sharepoint import utils as sharepoint_utils
 from lochness.sources.sharepoint.models.data_source import SharepointDataSource
 
 MODULE_NAME = "lochness.sources.sharepoint.tasks.pull_data"
+NOISY_MODULES = [
+    "msal.application",
+    "msal.authority",
+    "msal.telemetry",
+    "msal.token_cache",
+    "urllib3.connectionpool",
+    "urllib3.util.retry",
+]
 
 console = utils.get_console()
 
@@ -114,12 +122,17 @@ def fetch_subject_data(
         drive_id, project_name_cap, headers
     )
     if not project_folder:
-        raise RuntimeError(f"Project folder `{project_name_cap}` not found in `{metadata.drive_name}` drive.")
+        raise RuntimeError(
+            f"Project folder `{project_name_cap}` not found in `{metadata.drive_name}` drive."
+        )
 
     site_folder = sharepoint_utils.find_subfolder(
-        drive_id, project_folder['id'], f"{project_name_cap}{site_id}", headers)
+        drive_id, project_folder["id"], f"{project_name_cap}{site_id}", headers
+    )
     if not site_folder:
-        raise RuntimeError(f"Site folder {project_name_cap}{site_id} not found in `{project_name_cap}` folder.")
+        raise RuntimeError(
+            f"Site folder {project_name_cap}{site_id} not found in `{project_name_cap}` folder."
+        )
 
     lochness_root: str = config.parse(config_file, "general")["lochness_root"]  # type: ignore
     output_dir = (
@@ -136,13 +149,12 @@ def fetch_subject_data(
     subject_folders = sharepoint_utils.get_matching_subfolders(
         drive_id, site_folder, form_name, headers
     )
-    
+
     for subject_folder in subject_folders:
-        if subject_folder['name'] == subject_id:
+        if subject_folder["name"] == subject_id:
             logger.info(f"Found corresponding subfolder for {subject_id}")
             session_folders = sharepoint_utils.get_matching_subfolders(
-                drive_id, subject_folder, subject_id, headers,
-                relaxed_search=True
+                drive_id, subject_folder, subject_id, headers, relaxed_search=True
             )
             for session_folder in session_folders:
                 sharepoint_utils.download_new_or_updated_files(
@@ -197,7 +209,9 @@ def pull_all_data(
         ]
     if source_id:
         active_sharepoint_data_sources = [
-            ds for ds in active_sharepoint_data_sources if ds.data_source_name == source_id
+            ds
+            for ds in active_sharepoint_data_sources
+            if ds.data_source_name == source_id
         ]
 
     if not active_sharepoint_data_sources:
@@ -283,11 +297,30 @@ def pull_all_data(
             extra={"count": len(subjects_in_db)},
         )
 
-        for subject in subjects_in_db:
-            fetch_subject_data(
-                sharepoint_data_source=sharepoint_data_source,
-                subject_id=subject.subject_id,
+        try:
+            for subject in subjects_in_db:
+                fetch_subject_data(
+                    sharepoint_data_source=sharepoint_data_source,
+                    subject_id=subject.subject_id,
+                    config_file=config_file,
+                )
+        except RuntimeError as e:
+            logger.error(
+                f"Error fetching data for {sharepoint_data_source.data_source_name}: {str(e)}"
+            )
+            error_message = (
+                f"Error fetching data for {sharepoint_data_source.data_source_name}: "
+                "Potentially an issue with missing folders or authentication."
+            )
+            sharepoint_utils.log_event(
                 config_file=config_file,
+                log_level="ERROR",
+                event="sharepoint_data_pull_subject_fetch_error",
+                message=error_message,
+                project_id=sharepoint_data_source.project_id,
+                site_id=sharepoint_data_source.site_id,
+                data_source_name=sharepoint_data_source.data_source_name,
+                extra={"error_message": str(e)},
             )
 
     sharepoint_utils.log_event(
@@ -314,7 +347,10 @@ if __name__ == "__main__":
         "--site_id", type=str, default=None, help="Site ID to pull data for (optional)"
     )
     parser.add_argument(
-        "--source_id", type=str, default=None, help="Sharepoint source ID to pull data for (optional)"
+        "--source_id",
+        type=str,
+        default=None,
+        help="Sharepoint source ID to pull data for (optional)",
     )
     args = parser.parse_args()
 
@@ -325,7 +361,10 @@ if __name__ == "__main__":
         sys.exit(1)
 
     logs.configure_logging(
-        config_file=config_file, module_name=MODULE_NAME, logger=logger
+        config_file=config_file,
+        module_name=MODULE_NAME,
+        logger=logger,
+        noisy_modules=NOISY_MODULES,
     )
 
     logger.info("Starting SharePoint data pull...")
