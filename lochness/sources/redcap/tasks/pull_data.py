@@ -30,11 +30,12 @@ import logging
 import re
 from typing import Any, List, Dict, Optional
 from datetime import datetime
+import tempfile
 
 import requests
 from rich.logging import RichHandler
 
-from lochness.helpers import logs, utils, db, config, timer
+from lochness.helpers import logs, utils, db, config, timer, fs
 from lochness.models.subjects import Subject
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
@@ -290,22 +291,9 @@ def save_subject_data(
     Saves the fetched subject data to the file system and records it in the database.
     Uses the new path pattern for REDCap JSON files.
     """
+    temp_path: Optional[Path] = None
     try:
         lochness_root: Path = config.parse(config_file, "general")["lochness_root"]  # type: ignore
-        # Determine all REDCap data source instance names for this project+site
-        # sql_query = f"""
-        #     SELECT data_source_name FROM data_sources
-        #     WHERE project_id = '{project_id}' AND
-        #         site_id = '{site_id}' AND data_source_type = 'redcap'
-        # """
-        # df = db.execute_sql(config_file, sql_query)
-        # instance_names = (
-        #     sorted(df["data_source_name"].tolist())
-        #     if not df.empty
-        #     else [data_source_name]
-        # )
-        # The 'first' instance is the first in alphabetical order
-        # is_first_redcap = data_source_name == instance_names[0]
 
         # Capitalize project name (first letter uppercase, rest lowercase)
         project_name_cap = (
@@ -327,11 +315,61 @@ def save_subject_data(
         output_dir.mkdir(parents=True, exist_ok=True)
         file_name = f"{subject_id}.{project_name_cap}.{data_source_name}.json"
         file_path = output_dir / file_name
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(json.loads(data), f, indent=4)
+
+        # Write to a temp file first so we can hash before committing
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".json",
+            delete=False,
+            encoding="utf-8",
+            dir=output_dir,
+        ) as tmp_f:
+            temp_path = Path(tmp_f.name)
+            json.dump(json.loads(data), tmp_f, indent=4)
+
+        # Compute hash of the temp file
+        temp_file_model = File(file_path=temp_path)
+        new_md5 = temp_file_model.md5
+
+        # Check DB for the most recent hash recorded at this file_path
+        existing_file = File.get_most_recent_file_obj(
+            config_file=config_file, file_path=file_path
+        )
+        existing_md5 = existing_file.md5 if existing_file is not None else None
+
+        if existing_md5 is not None and existing_md5 == new_md5:
+            # File content unchanged – discard temp and skip DB recording
+            temp_path.unlink(missing_ok=True)
+            temp_path = None
+            logger.info(f"File unchanged for {subject_id}, skipping.")
+            log_event(
+                config_file=config_file,
+                log_level="INFO",
+                event="redcap_data_pull_file_unchanged",
+                message=f"File unchanged for {subject_id}, skipping DB record.",
+                project_id=project_id,
+                site_id=site_id,
+                data_source_name=data_source_name,
+                subject_id=subject_id,
+                extra={"file_path": str(file_path), "file_md5": new_md5},
+            )
+            return None
+
+        # File is new or has changed – move temp file to the actual path
+        fs.copy(
+            source=temp_path,
+            destination=file_path,
+        )
+        fs.remove(temp_path)
+        temp_path = None
+
         # Record the file in the database
-        file_model = File(
+        file_model = File.new(
             file_path=file_path,
+            file_size_mb=temp_file_model.file_size_mb,
+            m_time=datetime.fromtimestamp(file_path.stat().st_mtime),
+            md5=new_md5,
+            file_metadata={"available_at": [f"hn:{utils.get_hostname()}"]},
         )
         file_md5 = file_model.md5
         db.execute_queries(
@@ -356,6 +394,8 @@ def save_subject_data(
         return file_path, file_md5 if file_md5 else ""
     except Exception as e:  # pylint: disable=broad-except
         logger.error(f"Failed to save data for {subject_id}: {e}")
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
         log_event(
             config_file=config_file,
             log_level="ERROR",
@@ -595,11 +635,48 @@ def pull_file_attachments(
             output_dir.mkdir(parents=True, exist_ok=True)
             file_path = output_dir / original_filename
 
-            with open(file_path, "wb") as f:
-                f.write(file_content)
+            # Write to a temp file first so we can hash before committing
+            with tempfile.NamedTemporaryFile(
+                suffix=Path(original_filename).suffix,
+                delete=False,
+                dir=output_dir,
+            ) as tmp_att_f:
+                temp_att_path = Path(tmp_att_f.name)
+                tmp_att_f.write(file_content)
+
+            # Compute hash of the temp file
+            temp_att_model = File(file_path=temp_att_path)
+            new_att_md5 = temp_att_model.md5 or ""
+
+            # Check DB for the most recent hash recorded at this file_path
+            existing_att_file = File.get_most_recent_file_obj(
+                config_file=config_file, file_path=file_path
+            )
+            existing_att_md5 = (
+                existing_att_file.md5 if existing_att_file is not None else None
+            )
+
+            if existing_att_md5 is not None and existing_att_md5 == new_att_md5:
+                # Attachment unchanged – discard temp and skip
+                temp_att_path.unlink(missing_ok=True)
+                logger.debug(f"File attachment unchanged, skipping: {file_path}")
+                continue
+
+            # New or changed – move temp to the actual path
+            fs.copy(
+                source=temp_att_path,
+                destination=file_path,
+            )
+            fs.remove(temp_att_path)
 
             # Track file in DB
-            file_model = File(file_path=file_path)
+            file_model = File.new(
+                file_path=file_path,
+                file_size_mb=temp_att_model.file_size_mb,
+                m_time=datetime.fromtimestamp(file_path.stat().st_mtime),
+                md5=new_att_md5,
+                file_metadata={"available_at": [f"hn:{utils.get_hostname()}"]},
+            )
             file_md5 = file_model.md5 or ""
 
             # Record the data pull in DB
