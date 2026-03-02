@@ -362,7 +362,7 @@ def push_file_to_sink(
             push_metadata["relative_path"] = relative_path
 
         start_time = datetime.now()
-        data_push: DataPush = data_sink_i.push(
+        data_push: Optional[DataPush] = data_sink_i.push(
             file_to_push=actual_file_path,
             config_file=config_file,
             push_metadata=push_metadata,
