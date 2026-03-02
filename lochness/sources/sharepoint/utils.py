@@ -204,6 +204,18 @@ def get_matching_subfolders(
     )
 
     if not matching_folder:
+        logger.debug(
+            f"'{subdir_name}' folder not found inside {ms_folder_dict['name']}"
+        )
+        logger.debug(
+            f"Available folders in {ms_folder_dict['name']}: "
+        )
+        available_folders = sharepoint_api.list_folder_items(
+            drive_id, ms_folder_dict["id"], headers, timeout=timeout
+        )
+        logger.debug(
+            f"Found folders: {[f['name'] for f in available_folders if 'folder' in f]}"
+        )
         raise RuntimeError(f"'{subdir_name}' folder not found inside {ms_folder_dict['name']}.")
 
     subfolders = sharepoint_api.list_folder_items(
