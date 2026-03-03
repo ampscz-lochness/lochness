@@ -79,6 +79,9 @@ def fetch_subject_data(
     form_title = metadata.form_title
     modality = getattr(metadata, "modality", "unknown")
     date_str = getattr(metadata, "date_str", "unknown")
+    subdirs_under_each_subject_dir = getattr(
+            metadata, "subdirs_under_each_subject_dir", False)
+    without_form = getattr(metadata, "without_form", False)
     potential_file_uploads_without_form_update = getattr(
             metadata, "potential_file_uploads_without_form_update", False)
 
@@ -153,9 +156,18 @@ def fetch_subject_data(
     for subject_folder in subject_folders:
         if subject_folder["name"] == subject_id:
             logger.info(f"Found corresponding subfolder for {subject_id}")
-            session_folders = sharepoint_utils.get_matching_subfolders(
-                drive_id, subject_folder, subject_id, headers, relaxed_search=True
-            )
+
+            if subdirs_under_each_subject_dir:
+                session_folders = sharepoint_utils.get_matching_subfolders(
+                    drive_id,
+                    subject_folder,
+                    subject_id,
+                    headers,
+                    relaxed_search=True,
+                )
+            else:
+                session_folders = [subject_folder]
+
             for session_folder in session_folders:
                 sharepoint_utils.download_new_or_updated_files(
                     session_folder,
@@ -169,6 +181,7 @@ def fetch_subject_data(
                     data_source_name,
                     output_dir,
                     potential_file_uploads_without_form_update,
+                    without_form=without_form,
                     config_file=config_file,
                 )
 
