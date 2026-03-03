@@ -64,7 +64,8 @@ def get_legacy_metadata_csv_for_mindlamp(
 
     df["Mindlamp"] = df.apply(
             lambda x: f"mindlamp.{x.project_id}{x.site_id}:"
-            f"{x.subject_metadata['mindlamp_id']}",
+            f"{x.subject_metadata['mindlamp_id']}" if 'mindlamp_id'
+            in x.subject_metadata else '',
             axis=1)
 
     df_to_save = df[["Active", "Consent", "project_id", "subject_id",
@@ -110,8 +111,6 @@ def write_legacy_metadata_csv_for_mindlamp(
             / f"{project_name_cap}{site_id}_metadata.csv"
             )
 
-        print(project_site_df)
-        return
         project_site_df.to_csv(output_file, index=False)
         logger.info(f"Metadata for project {project_id} and site {site_id} "
                     f"written to {output_file}")
@@ -121,6 +120,8 @@ def write_legacy_metadata_csv_for_mindlamp(
             file_path=output_file,
         )
         file_md5 = file_model.md5
+        file_model.file_metadata['project_id'] = project_id
+        file_model.file_metadata['site_id'] = site_id
         db.execute_queries(
             config_file,
             file_model.to_sql_queries_with_availability_update(),

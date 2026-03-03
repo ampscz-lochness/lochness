@@ -312,28 +312,34 @@ class File:
         that has not yet been pushed to the specified data sink.
         """
         query = f"""
-        SELECT files.*
-        FROM (
-            SELECT files.*,
+        WITH latest_files AS (
+            SELECT
+                COALESCE(dp.project_id, NULLIF(f.file_metadata->>'project_id','')) AS project_id,
+                COALESCE(dp.site_id,    NULLIF(f.file_metadata->>'site_id',''))    AS site_id,
+                f.*,
                 ROW_NUMBER() OVER (
-                    PARTITION BY files.file_path
-                    ORDER BY files.file_m_time DESC
-                ) as rn
-            FROM files
-            LEFT JOIN data_pull ON (
-                data_pull.file_path = files.file_path AND
-                data_pull.file_md5 = files.file_md5 AND
-                data_pull.project_id = '{project_id}' AND
-                data_pull.site_id = '{site_id}'
+                    PARTITION BY f.file_path
+                    ORDER BY f.file_m_time DESC
+                ) AS rn
+            FROM files f
+            LEFT JOIN data_pull dp ON (
+                dp.file_path = f.file_path
+                AND dp.file_md5 = f.file_md5
+                AND dp.project_id = '{project_id}'
+                AND dp.site_id = '{site_id}'
             )
-        ) files
+        )
+        SELECT files.*
+        FROM latest_files files
         LEFT JOIN data_push ON (
             data_push.file_path = files.file_path AND
             data_push.file_md5 = files.file_md5 AND
             data_push.data_sink_id = {data_sink_id}
         )
-        WHERE files.rn = 1
-            AND data_push.data_sink_id IS NULL;
+        WHERE rn = 1
+          AND project_id = '{project_id}'
+          AND site_id = '{site_id}'
+          AND data_push.data_sink_id IS NULL;
         """
 
         db_df = db.execute_sql(
