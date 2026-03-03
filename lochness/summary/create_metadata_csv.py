@@ -120,6 +120,9 @@ def write_legacy_metadata_csv_for_mindlamp(
             file_path=output_file,
         )
         file_md5 = file_model.md5
+        # Store project_id and site_id in file_metadata so that
+        # get_files_to_push can match this file to the correct project/site
+        # even when no DataPull row exists for it (locally-generated files).
         file_model.file_metadata['project_id'] = project_id
         file_model.file_metadata['site_id'] = site_id
         db.execute_queries(

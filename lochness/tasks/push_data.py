@@ -777,6 +777,14 @@ def push_all_data(
                 )
 
             try:
+                # Determine the relative_path to preserve the original directory
+                # structure when pushing to a data sink.
+                # - If the file came from a DataPull, use the relative_path that
+                #   was recorded at pull time (e.g. "PROTECTED/assets/foo.zip").
+                # - If there is no DataPull (subject_id falls back to "unknown"),
+                #   the file was generated locally (e.g. a metadata CSV).  In
+                #   that case derive the relative path from lochness_root so the
+                #   sink can reconstruct the same PHOENIX directory layout.
                 relative_path = None
                 if associated_data_pull:
                     relative_path = associated_data_pull.pull_metadata.get(

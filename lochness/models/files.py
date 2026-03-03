@@ -310,10 +310,23 @@ class File:
         Return the most recent version of files to push for a given project and site.
         Only returns the latest file (by file_m_time) for each unique file_path
         that has not yet been pushed to the specified data sink.
+
+        A file qualifies for pushing when its project/site can be resolved from
+        *either* a matching ``data_pull`` row **or** from the ``file_metadata``
+        JSON column (keys ``project_id`` / ``site_id``).  This means files that
+        were ingested without a DataPull record (e.g. locally-generated metadata
+        CSVs) are still eligible for pushing as long as their ``file_metadata``
+        contains the correct project and site identifiers.
+
+        The LEFT JOIN on ``data_pull`` is intentionally scoped to the requested
+        project/site, so the COALESCE falls through to ``file_metadata`` for
+        files that have no DataPull entry.
         """
         query = f"""
         WITH latest_files AS (
             SELECT
+                -- Prefer project/site from data_pull; fall back to file_metadata.
+                -- NULLIF converts empty strings to NULL so COALESCE works correctly.
                 COALESCE(dp.project_id, NULLIF(f.file_metadata->>'project_id','')) AS project_id,
                 COALESCE(dp.site_id,    NULLIF(f.file_metadata->>'site_id',''))    AS site_id,
                 f.*,
@@ -322,6 +335,9 @@ class File:
                     ORDER BY f.file_m_time DESC
                 ) AS rn
             FROM files f
+            -- LEFT JOIN (not INNER JOIN) keeps files that have no DataPull row.
+            -- The project/site filter is applied here so files from other
+            -- projects do not accidentally inherit a different row's values.
             LEFT JOIN data_pull dp ON (
                 dp.file_path = f.file_path
                 AND dp.file_md5 = f.file_md5
@@ -331,6 +347,7 @@ class File:
         )
         SELECT files.*
         FROM latest_files files
+        -- Exclude files already pushed to this sink.
         LEFT JOIN data_push ON (
             data_push.file_path = files.file_path AND
             data_push.file_md5 = files.file_md5 AND
