@@ -58,7 +58,7 @@ with DAG(
     schedule=[redcap_metadata_refresh_asset],
     max_active_runs=1,
     catchup=False,
-    tags=["lochness", "summary", "metadata"],
+    tags=["lochness", "summary", "metadata", "redcap"],
     params=ParamsDict(
         {
             "project_id": Param(
