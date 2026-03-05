@@ -156,6 +156,10 @@ def fetch_subject_data(
             session_folders = sharepoint_utils.get_matching_subfolders(
                 drive_id, subject_folder, subject_id, headers, relaxed_search=True
             )
+
+            if session_folders is None:
+                continue
+
             for session_folder in session_folders:
                 sharepoint_utils.download_new_or_updated_files(
                     session_folder,
