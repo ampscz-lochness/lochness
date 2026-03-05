@@ -8,6 +8,7 @@ as parameters, keeping this layer free of config-file dependencies.
 import logging
 import re
 from typing import Any, Dict, List, Optional
+import json
 
 import requests
 
@@ -24,7 +25,7 @@ def export_records(
     export_survey_fields: bool = False,
     export_data_access_groups: bool = False,
     timeout_s: int = 60,
-) -> Optional[bytes]:
+) -> Optional[List[Dict[str, Any]]]:
     """
     Export records from a REDCap project.
 
@@ -87,7 +88,8 @@ def export_records(
             logger.debug("REDCap returned empty response for export_records.")
             return None
 
-        return r.content
+        record_data = json.loads(r.content)
+        return record_data
     except requests.exceptions.RequestException as e:
         logger.error("Failed to export records from REDCap: %s", e)
         raise

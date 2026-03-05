@@ -205,7 +205,7 @@ def fetch_metadata(
             requested_variables.append(variable_name)
 
     try:
-        response = redcap_api.export_records(
+        raw_data = redcap_api.export_records(
             api_token=api_token,
             endpoint_url=redcap_endpoint_url,
             fields=requested_variables,  # type: ignore
@@ -217,11 +217,9 @@ def fetch_metadata(
         )
         return None
 
-    if response is None:
+    if raw_data is None:
         logger.error(f"No metadata records returned for {identifier}.")
         return None
-
-    raw_data = json.loads(response)
 
     results: List[Dict[str, str]] = []
     for record in raw_data:

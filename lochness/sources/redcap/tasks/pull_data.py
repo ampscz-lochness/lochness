@@ -158,7 +158,7 @@ def fetch_subject_data(
     subject_id: str,
     config_file: Path,
     timeout_s: int = 60,
-) -> Optional[bytes]:
+) -> Optional[List[Dict[str, Any]]]:
     """
     Fetches data for a single subject from REDCap.
 
@@ -169,7 +169,7 @@ def fetch_subject_data(
         timeout_s (int): Timeout for the API request.
 
     Returns:
-        Optional[bytes]: The raw data from REDCap, or None if fetching fails.
+        Optional[List[Dict[str, Any]]]: The raw data from REDCap, or None if fetching fails.
     """
     project_id = redcap_data_source.project_id
     site_id = redcap_data_source.site_id
@@ -262,7 +262,7 @@ def fetch_subject_data(
 
 
 def save_subject_data(
-    data: bytes,
+    data: List[Dict[str, Any]],
     project_id: str,
     site_id: str,
     subject_id: str,
@@ -307,7 +307,7 @@ def save_subject_data(
             dir=output_dir,
         ) as tmp_f:
             temp_path = Path(tmp_f.name)
-            json.dump(json.loads(data), tmp_f, indent=4)
+            json.dump(data, tmp_f, indent=4)
 
         # Compute hash of the temp file
         temp_file_model = File(file_path=temp_path)
