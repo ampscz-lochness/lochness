@@ -3,7 +3,7 @@ Data Source Model for SharePoint
 """
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -23,6 +23,8 @@ class SharepointDataSourceMetadata(BaseModel):
     drive_name: str
     date_str: str
     potential_file_uploads_without_form_update: bool
+    subdirs_under_each_subject_dir: Optional[bool]
+    without_form: Optional[bool]
 
 
 class SharepointDataSource(BaseModel):
@@ -88,6 +90,8 @@ class SharepointDataSource(BaseModel):
                     drive_name=row["data_source_metadata"]["drive_name"],
                     date_str=row["data_source_metadata"]["date_str"],
                     potential_file_uploads_without_form_update=row["data_source_metadata"]["potential_file_uploads_without_form_update"],
+                    subdirs_under_each_subject_dir=row["data_source_metadata"].get("subdirs_under_each_subject_dir", False),
+                    without_form=row["data_source_metadata"].get("without_form", False),
                 ),
             )
             return sharepoint_data_source

@@ -583,6 +583,7 @@ def download_new_or_updated_files(
     data_source_name: str,
     output_dir_root: Path,
     potential_file_uploads_without_form_update: bool,
+    without_form: bool,
     config_file: Path,
 ) -> None:
     """
@@ -611,21 +612,24 @@ def download_new_or_updated_files(
     logger.info("Found subfolder: %s", subfolder_name)
 
     files = sharepoint_api.list_folder_items(drive_id, subfolder_id, headers)
-    response_json_file = next(
-        (f for f in files if f.get("name") == "response.submitted.json"), None
-    )
-    if not response_json_file:
-        logger.debug(
-            "No response.submitted.json found in %s, skipping.", subfolder_name
+    if without_form:
+        output_dir = output_dir_root
+    else:
+        # reponse needs to be downloaded each time as it does not have checksum
+        response_json_file = next(
+            (f for f in files if f.get("name") == "response.submitted.json"), None
         )
-        return
+        if not response_json_file:
+            logger.debug(
+                "No response.submitted.json found in %s, skipping.", subfolder_name
+            )
+            return
 
-    # reponse needs to be downloaded each time as it does not have checksum
-    output_dir = is_response_json_updated(
-        response_json_file, subfolder_name, subject_id,
-        form_name, date_str, potential_file_uploads_without_form_update,
-        output_dir_root
-    )
+        output_dir = is_response_json_updated(
+            response_json_file, subfolder_name, subject_id,
+            form_name, date_str, potential_file_uploads_without_form_update,
+            output_dir_root
+        )
 
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
