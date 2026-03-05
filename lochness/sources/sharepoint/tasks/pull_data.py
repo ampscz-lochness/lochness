@@ -168,6 +168,9 @@ def fetch_subject_data(
             else:
                 session_folders = [subject_folder]
 
+            if session_folders is None:
+                continue
+                
             for session_folder in session_folders:
                 sharepoint_utils.download_new_or_updated_files(
                     session_folder,

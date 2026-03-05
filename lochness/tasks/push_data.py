@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from rich.logging import RichHandler
 
-from lochness.helpers import db, fs, logs, utils
+from lochness.helpers import db, fs, logs, utils, config
 from lochness.models.data_pulls import DataPull
 from lochness.models.data_push import DataPush
 from lochness.models.data_sinks import DataSink
@@ -358,6 +358,7 @@ def push_file_to_sink(
             "file_size_mb": file_obj.file_size_mb,  # type: ignore
             "modality": modality,
         }
+
         if relative_path:
             push_metadata["relative_path"] = relative_path
 
@@ -642,6 +643,7 @@ def push_all_data(
             site_id=active_data_sink.site_id,
             data_sink_id=data_sink_id,
         )
+
         if not files_to_push:
             logger.info("No files found to push.")
             Logs(
@@ -775,6 +777,16 @@ def push_all_data(
                 )
 
             try:
+                relative_path = None
+                if associated_data_pull:
+                    relative_path = associated_data_pull.pull_metadata.get(
+                            "relative_path")
+                elif subject_id == "unknown":
+                    lochness_root: Path = config.parse(
+                            config_file, "general")[
+                                    "lochness_root"]  # type: ignore
+                    relative_path = str(file_obj.file_path.relative_to(
+                        lochness_root))
                 push_file_to_sink(
                     file_obj=file_obj,
                     data_sink=active_data_sink,
@@ -785,11 +797,7 @@ def push_all_data(
                     subject_id=subject_id,
                     config_file=config_file,
                     source_file_path=source_file_path,
-                    relative_path=(
-                        associated_data_pull.pull_metadata.get("relative_path")
-                        if associated_data_pull
-                        else None
-                    ),
+                    relative_path=relative_path,
                 )
             finally:
                 # Clean up temporary file if we pulled from remote
