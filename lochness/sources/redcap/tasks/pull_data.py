@@ -27,7 +27,6 @@ except ValueError:
 import argparse
 import json
 import logging
-import re
 from typing import Any, List, Dict, Optional
 from datetime import datetime
 import tempfile
@@ -36,6 +35,7 @@ import requests
 from rich.logging import RichHandler
 
 from lochness.helpers import logs, utils, db, config, timer, fs
+from lochness.sources.redcap import api as redcap_api
 from lochness.models.subjects import Subject
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
@@ -202,49 +202,31 @@ def fetch_subject_data(
 
     api_token = keystore.key_value
 
-    filter_logic = ""
+    filter_logic: Optional[str] = None
+    records_list: Optional[List[str]] = None
+
     if redcap_data_source.data_source_metadata.subject_id_variable_as_the_pk:
-        data = {
-            "token": api_token,
-            "content": "record",
-            "action": "export",
-            "format": "json",  # Changed from 'csv' to 'json'
-            "type": "flat",
-            "returnFormat": "json",
-            "records[0]": subject_id,  # Export data for this specific subject
-        }
+        records_list = [subject_id]
     else:
         subject_id_var = redcap_data_source.data_source_metadata.subject_id_variable
 
         if redcap_data_source.data_source_metadata.messy_subject_id:
             filter_logic = add_filter_logic_for_penncnb_redcap(
-                filter_logic,
+                "",
                 subject_id,
                 subject_id_var,  # type: ignore
             )
 
-        data = {
-            "token": api_token,
-            "content": "record",
-            "action": "export",
-            "format": "json",  # Changed from 'csv' to 'json'
-            "type": "flat",
-            "returnFormat": "json",
-            "csvDelimiter": "",
-            "rawOrLabel": "raw",
-            "rawOrLabelHeaders": "raw",
-            "exportCheckboxLabel": "false",
-            "exportSurveyFields": "false",
-            "exportDataAccessGroups": "false",
-            "filterLogic": filter_logic,  # Export data for this specific subject
-        }
-
     try:
-        r = requests.post(redcap_endpoint_url, data=data, timeout=timeout_s)
-        r.raise_for_status()  # Raise an exception for HTTP errors (4xx or 5xx)
+        result = redcap_api.export_records(
+            api_token=api_token,
+            endpoint_url=redcap_endpoint_url,
+            filter_logic=filter_logic,
+            records=records_list,
+            timeout_s=timeout_s,
+        )
 
-        # Check if empty response
-        if r.content in [b"", b"[]"]:
+        if result is None:
             log_event(
                 config_file=config_file,
                 log_level="WARN",
@@ -254,13 +236,13 @@ def fetch_subject_data(
                 site_id=site_id,
                 data_source_name=data_source_name,
                 subject_id=subject_id,
-                extra={"filter_logic": filter_logic},
+                extra={"filter_logic": filter_logic or ""},
             )
 
             logger.warning(f"No data found for {identifier}")
             return None
 
-        return r.content
+        return result
 
     except requests.exceptions.RequestException as e:
         logger.error(f"filter_logic: {filter_logic}")
@@ -459,6 +441,8 @@ def fetch_file_attachment(
     """
     Downloads a single file from a REDCap file upload field.
 
+    Delegates to :func:`redcap_api.export_file`.
+
     Args:
         endpoint_url (str): The REDCap API endpoint URL.
         api_token (str): The API token for authentication.
@@ -472,40 +456,15 @@ def fetch_file_attachment(
         Optional[tuple[bytes, str]]: A tuple of (file_content, original_filename),
             or None if the download fails.
     """
-    data: Dict[str, str] = {
-        "token": api_token,
-        "content": "file",
-        "action": "export",
-        "record": record_id,
-        "field": field_name,
-        "returnFormat": "json",
-    }
-    if event_name:
-        data["event"] = event_name
-    if repeat_instance:
-        data["repeat_instance"] = repeat_instance
-
-    try:
-        r = requests.post(endpoint_url, data=data, timeout=timeout_s)
-        r.raise_for_status()
-
-        # REDCap returns the filename in the Content-Type header as:
-        #   application/pdf; name="filename.pdf"
-        filename: Optional[str] = None
-        content_type = r.headers.get("Content-Type", "")
-        name_match = re.search(r'name="([^"]+)"', content_type)
-        if name_match:
-            filename = name_match.group(1)
-
-        if not filename:
-            filename = f"{field_name}_file"
-
-        return r.content, filename
-    except requests.exceptions.RequestException as e:
-        logger.error(
-            f"Failed to download file for record={record_id}, field={field_name}: {e}"
-        )
-        return None
+    return redcap_api.export_file(
+        api_token=api_token,
+        endpoint_url=endpoint_url,
+        record_id=record_id,
+        field_name=field_name,
+        event_name=event_name,
+        repeat_instance=repeat_instance,
+        timeout_s=timeout_s,
+    )
 
 
 def pull_file_attachments(
