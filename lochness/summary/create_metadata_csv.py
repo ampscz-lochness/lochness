@@ -3,15 +3,32 @@ under the PHOENIX/PROTECTED/site/{site}_metadata.csv
 """
 
 import sys
-import logging
-import argparse
-from typing import Dict, Any
 from pathlib import Path
+
+file = Path(__file__).resolve()
+parent = file.parent
+root_dir = None  # pylint: disable=invalid-name
+for parent in file.parents:
+    if parent.name == "lochness_v2":
+        root_dir = parent
+
+sys.path.append(str(root_dir))
+
+# remove current directory from path
+try:
+    sys.path.remove(str(parent))
+except ValueError:
+    pass
+
+import argparse
+import logging
+from typing import Any, Dict, Optional
+
 from rich.logging import RichHandler
+
+from lochness.helpers import config, db, logs, utils
 from lochness.models.files import File
 from lochness.sources.redcap.tasks.pull_data import log_event
-from lochness.helpers import utils, db, config, logs
-
 
 MODULE_NAME = "lochness.summary.create_metadata_csv"
 NOISY_MODULES = ["urllib3.connectionpool"]
@@ -28,21 +45,19 @@ logging.basicConfig(**logargs)
 
 
 def get_legacy_metadata_csv_for_mindlamp(
-        config_file: Path,
-        project_id: str = None,
-        site_id: str = None
-        ) -> Any:
+    config_file: Path, project_id: Optional[str] = None, site_id: Optional[str] = None
+) -> Any:
     """Get legacy metadata dataframe file for all site"""
 
     config_file = utils.get_config_file_path()
     query = """
         SELECT
             *
-        FROM
-            subjects s
-        WHERE
-            (s.subject_metadata->>'missing_required_variables' IS NULL OR
-             s.subject_metadata->>'missing_required_variables' = '')
+        FROM subjects s
+        WHERE (
+            s.subject_metadata->>'missing_required_variables' IS NULL OR
+            s.subject_metadata->>'missing_required_variables' = ''
+        )
         """
 
     if project_id is not None:
@@ -53,47 +68,49 @@ def get_legacy_metadata_csv_for_mindlamp(
 
     print(query)
 
-    df = db.execute_sql(
-        config_file,
-        query,
-        db="postgresql"
-    )
+    df = db.execute_sql(config_file, query, db="postgresql")
 
     df["Active"] = 1
-    df["Consent"] = df.subject_metadata.apply(lambda x: x['consent_date'])
+    df["Consent"] = df.subject_metadata.apply(lambda x: x["consent_date"])
 
     df["Mindlamp"] = df.apply(
-            lambda x: f"mindlamp.{x.project_id}{x.site_id}:"
-            f"{x.subject_metadata['mindlamp_id']}" if 'mindlamp_id'
-            in x.subject_metadata else '',
-            axis=1)
+        lambda x: (
+            f"mindlamp.{x.project_id}{x.site_id}:"
+            f"{x.subject_metadata['mindlamp_id']}"
+            if "mindlamp_id" in x.subject_metadata
+            else ""
+        ),
+        axis=1,
+    )
 
-    df_to_save = df[["Active", "Consent", "project_id", "subject_id",
-                     "site_id", "Mindlamp"]]
+    df_to_save = df[
+        ["Active", "Consent", "project_id", "subject_id", "site_id", "Mindlamp"]
+    ]
 
-    df_to_save.columns = ["Active", "Consent", "Project", "Subject ID",
-                          "Study", "Mindlamp"]
+    df_to_save.columns = [
+        "Active",
+        "Consent",
+        "Project",
+        "Subject ID",
+        "Study",
+        "Mindlamp",
+    ]
     return df_to_save
 
 
 def write_legacy_metadata_csv_for_mindlamp(
-        config_file: Path,
-        project_id: str = None,
-        site_id: str = None
-        ):
+    config_file: Path, project_id: Optional[str] = None, site_id: Optional[str] = None
+):
     """Write legacy metadata csv file for all site"""
     df = get_legacy_metadata_csv_for_mindlamp(
-            config_file=config_file,
-            project_id=project_id,
-            site_id=site_id
-            )
+        config_file=config_file, project_id=project_id, site_id=site_id
+    )
 
-    for (project_id, site_id), project_site_df in df.groupby(
-            ["Project", "Study"]):
-        logger.info(f"Writing metadata for project {project_id} and "
-                    f"site {site_id}")
-        lochness_root: Path = config.parse(
-                config_file, "general")["lochness_root"]  # type: ignore
+    for (project_id, site_id), project_site_df in df.groupby(["Project", "Study"]):
+        logger.info(f"Writing metadata for project {project_id} and " f"site {site_id}")
+        lochness_root: Path = config.parse(config_file, "general")[
+            "lochness_root"
+        ]  # type: ignore
 
         # Capitalize project name (first letter uppercase, rest lowercase)
         project_name_cap = (
@@ -102,6 +119,13 @@ def write_legacy_metadata_csv_for_mindlamp(
             else project_id
         )
 
+        if project_name_cap is None or site_id is None:
+            logger.error(
+                f"Project ID and Site ID must be provided. "
+                f"Got project_id={project_id} and site_id={site_id}"
+            )
+            continue
+
         output_file = (
             Path(lochness_root)
             / project_name_cap
@@ -109,19 +133,21 @@ def write_legacy_metadata_csv_for_mindlamp(
             / "PROTECTED"
             / f"{project_name_cap}{site_id}"
             / f"{project_name_cap}{site_id}_metadata.csv"
-            )
+        )
 
         project_site_df.to_csv(output_file, index=False)
-        logger.info(f"Metadata for project {project_id} and site {site_id} "
-                    f"written to {output_file}")
+        logger.info(
+            f"Metadata for project {project_id} and site {site_id} "
+            f"written to {output_file}"
+        )
 
         # Record the file in the database
         file_model = File(
             file_path=output_file,
         )
         file_md5 = file_model.md5
-        file_model.file_metadata['project_id'] = project_id
-        file_model.file_metadata['site_id'] = site_id
+        file_model.file_metadata["project_id"] = project_id
+        file_model.file_metadata["site_id"] = site_id
         db.execute_queries(
             config_file,
             file_model.to_sql_queries_with_availability_update(),
@@ -134,27 +160,22 @@ def write_legacy_metadata_csv_for_mindlamp(
             message=f"Successfully metadata for {project_id} to {site_id}.",
             project_id=project_id,
             site_id=site_id,
-            extra={"file_path": str(output_file),
-                   "file_md5": file_md5 if file_md5 else None},
+            extra={
+                "file_path": str(output_file),
+                "file_md5": file_md5 if file_md5 else None,
+            },
         )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Write legacy metadata csv file"
-    )
+    parser = argparse.ArgumentParser(description="Write legacy metadata csv file")
     parser.add_argument(
         "--project_id",
         type=str,
         default=None,
         help="Project ID (optional)",
     )
-    parser.add_argument(
-        "--site_id",
-        type=str,
-        default=None,
-        help="Site ID (optional)"
-    )
+    parser.add_argument("--site_id", type=str, default=None, help="Site ID (optional)")
     args = parser.parse_args()
 
     config_file = utils.get_config_file_path()
