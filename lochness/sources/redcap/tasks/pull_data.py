@@ -36,6 +36,7 @@ from rich.logging import RichHandler
 
 from lochness.helpers import logs, utils, db, config, timer, fs
 from lochness.sources.redcap import api as redcap_api
+from lochness.sources.redcap import utils as redcap_utils
 from lochness.models.subjects import Subject
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
@@ -242,6 +243,12 @@ def fetch_subject_data(
             logger.warning(f"No data found for {identifier}")
             return None
 
+        # Redact identifers
+        identifier_fields = redcap_utils.get_identifier_fields_from_data_source(
+            redcap_data_source
+        )
+        result = redcap_utils.redact_identifiers(result, identifier_fields)
+
         return result
 
     except requests.exceptions.RequestException as e:
@@ -392,81 +399,6 @@ def save_subject_data(
         return None
 
 
-def get_file_fields_from_dictionary(
-    redcap_data_source: RedcapDataSource,
-) -> Dict[str, str]:
-    """
-    Identifies file upload fields from the REDCap data dictionary stored in
-    the database.  Returns a mapping of field_name : form_name.
-
-    Args:
-        redcap_data_source (RedcapDataSource): The REDCap data source.
-
-    Returns:
-        Dict[str, str]: Mapping of field_name → form_name for every file
-            upload field.  Empty dict when no dictionary is available or
-            no file fields exist.
-    """
-
-    data_dictionary: Optional[List[Dict[str, str]]] = (
-        redcap_data_source.data_source_metadata.dictionary
-    )
-
-    if data_dictionary is None:
-        logger.warning(
-            f"No data dictionary found in metadata for {redcap_data_source.data_source_name}. "
-            "Run pull_dictionary first."
-        )
-        return {}
-
-    # field_name: form_name for every file field
-    file_fields: Dict[str, str] = {
-        entry["field_name"]: entry.get("form_name", "unknown_form")
-        for entry in data_dictionary
-        if entry.get("field_type") == "file"
-    }
-
-    return file_fields
-
-
-def fetch_file_attachment(
-    endpoint_url: str,
-    api_token: str,
-    record_id: str,
-    field_name: str,
-    event_name: Optional[str] = None,
-    repeat_instance: Optional[str] = None,
-    timeout_s: int = 60,
-) -> Optional[tuple[bytes, str]]:
-    """
-    Downloads a single file from a REDCap file upload field.
-
-    Delegates to :func:`redcap_api.export_file`.
-
-    Args:
-        endpoint_url (str): The REDCap API endpoint URL.
-        api_token (str): The API token for authentication.
-        record_id (str): The record ID (primary key) in REDCap.
-        field_name (str): The field name of the file upload field.
-        event_name (Optional[str]): The event name (for longitudinal projects).
-        repeat_instance (Optional[str]): The repeat instance number.
-        timeout_s (int): Timeout for the API request.
-
-    Returns:
-        Optional[tuple[bytes, str]]: A tuple of (file_content, original_filename),
-            or None if the download fails.
-    """
-    return redcap_api.export_file(
-        api_token=api_token,
-        endpoint_url=endpoint_url,
-        record_id=record_id,
-        field_name=field_name,
-        event_name=event_name,
-        repeat_instance=repeat_instance,
-        timeout_s=timeout_s,
-    )
-
-
 def pull_file_attachments(
     redcap_data_source: RedcapDataSource,
     subject_id: str,
@@ -562,7 +494,7 @@ def pull_file_attachments(
 
             # Download the file
             with timer.Timer() as file_pull_timer:
-                result = fetch_file_attachment(
+                result = redcap_api.export_file(
                     endpoint_url=endpoint_url,
                     api_token=api_token,
                     record_id=str(record_id),
@@ -652,9 +584,9 @@ def pull_file_attachments(
                     "field_name": field_name,
                     "form_name": form_name,
                     "event_name": event_name,
-                    "repeat_instance": str(repeat_instance)
-                    if repeat_instance
-                    else None,
+                    "repeat_instance": (
+                        str(repeat_instance) if repeat_instance else None
+                    ),
                     "record_id": str(record_id),
                     "file_size_bytes": len(file_content),
                     "type": "file_attachment",
@@ -754,7 +686,7 @@ def pull_all_data(
     )
 
     for redcap_data_source in active_redcap_data_sources:
-        file_fields = get_file_fields_from_dictionary(redcap_data_source)
+        file_fields = redcap_utils.get_file_fields_from_dictionary(redcap_data_source)
         if file_fields:
             logger.info(
                 f"Found {len(file_fields)} file upload field(s) for "
