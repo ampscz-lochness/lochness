@@ -119,7 +119,7 @@ class RedcapDataSource(BaseModel):
         config_file: Path,
         project_id: str,
         site_id: str,
-        dictionary: Dict[str, Any],
+        dictionary: List[Dict[str, Any]],
     ) -> None:
         """
         Update the REDCap metadata history for a specific project and site.

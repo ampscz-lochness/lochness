@@ -27,7 +27,6 @@ except ValueError:
 import argparse
 import json
 import logging
-import re
 from typing import Any, List, Dict, Optional
 from datetime import datetime
 import tempfile
@@ -36,6 +35,8 @@ import requests
 from rich.logging import RichHandler
 
 from lochness.helpers import logs, utils, db, config, timer, fs
+from lochness.sources.redcap import api as redcap_api
+from lochness.sources.redcap import utils as redcap_utils
 from lochness.models.subjects import Subject
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
@@ -158,7 +159,7 @@ def fetch_subject_data(
     subject_id: str,
     config_file: Path,
     timeout_s: int = 60,
-) -> Optional[bytes]:
+) -> Optional[List[Dict[str, Any]]]:
     """
     Fetches data for a single subject from REDCap.
 
@@ -169,7 +170,7 @@ def fetch_subject_data(
         timeout_s (int): Timeout for the API request.
 
     Returns:
-        Optional[bytes]: The raw data from REDCap, or None if fetching fails.
+        Optional[List[Dict[str, Any]]]: The raw data from REDCap, or None if fetching fails.
     """
     project_id = redcap_data_source.project_id
     site_id = redcap_data_source.site_id
@@ -202,49 +203,31 @@ def fetch_subject_data(
 
     api_token = keystore.key_value
 
-    filter_logic = ""
+    filter_logic: Optional[str] = None
+    records_list: Optional[List[str]] = None
+
     if redcap_data_source.data_source_metadata.subject_id_variable_as_the_pk:
-        data = {
-            "token": api_token,
-            "content": "record",
-            "action": "export",
-            "format": "json",  # Changed from 'csv' to 'json'
-            "type": "flat",
-            "returnFormat": "json",
-            "records[0]": subject_id,  # Export data for this specific subject
-        }
+        records_list = [subject_id]
     else:
         subject_id_var = redcap_data_source.data_source_metadata.subject_id_variable
 
         if redcap_data_source.data_source_metadata.messy_subject_id:
             filter_logic = add_filter_logic_for_penncnb_redcap(
-                filter_logic,
+                "",
                 subject_id,
                 subject_id_var,  # type: ignore
             )
 
-        data = {
-            "token": api_token,
-            "content": "record",
-            "action": "export",
-            "format": "json",  # Changed from 'csv' to 'json'
-            "type": "flat",
-            "returnFormat": "json",
-            "csvDelimiter": "",
-            "rawOrLabel": "raw",
-            "rawOrLabelHeaders": "raw",
-            "exportCheckboxLabel": "false",
-            "exportSurveyFields": "false",
-            "exportDataAccessGroups": "false",
-            "filterLogic": filter_logic,  # Export data for this specific subject
-        }
-
     try:
-        r = requests.post(redcap_endpoint_url, data=data, timeout=timeout_s)
-        r.raise_for_status()  # Raise an exception for HTTP errors (4xx or 5xx)
+        result = redcap_api.export_records(
+            api_token=api_token,
+            endpoint_url=redcap_endpoint_url,
+            filter_logic=filter_logic,
+            records=records_list,
+            timeout_s=timeout_s,
+        )
 
-        # Check if empty response
-        if r.content in [b"", b"[]"]:
+        if result is None:
             log_event(
                 config_file=config_file,
                 log_level="WARN",
@@ -254,13 +237,19 @@ def fetch_subject_data(
                 site_id=site_id,
                 data_source_name=data_source_name,
                 subject_id=subject_id,
-                extra={"filter_logic": filter_logic},
+                extra={"filter_logic": filter_logic or ""},
             )
 
             logger.warning(f"No data found for {identifier}")
             return None
 
-        return r.content
+        # Redact identifers
+        identifier_fields = redcap_utils.get_identifier_fields_from_data_source(
+            redcap_data_source
+        )
+        result = redcap_utils.redact_identifiers(result, identifier_fields)
+
+        return result
 
     except requests.exceptions.RequestException as e:
         logger.error(f"filter_logic: {filter_logic}")
@@ -280,7 +269,7 @@ def fetch_subject_data(
 
 
 def save_subject_data(
-    data: bytes,
+    data: List[Dict[str, Any]],
     project_id: str,
     site_id: str,
     subject_id: str,
@@ -325,7 +314,7 @@ def save_subject_data(
             dir=output_dir,
         ) as tmp_f:
             temp_path = Path(tmp_f.name)
-            json.dump(json.loads(data), tmp_f, indent=4)
+            json.dump(data, tmp_f, indent=4)
 
         # Compute hash of the temp file
         temp_file_model = File(file_path=temp_path)
@@ -354,6 +343,9 @@ def save_subject_data(
                 extra={"file_path": str(file_path), "file_md5": new_md5},
             )
             return None
+        else:
+            logger.info(f"File is new or changed for {subject_id}, saving to {file_path}.")
+
 
         # File is new or has changed – move temp file to the actual path
         fs.copy(
@@ -406,104 +398,6 @@ def save_subject_data(
             data_source_name=data_source_name,
             subject_id=subject_id,
             extra={"error": str(e)},
-        )
-        return None
-
-
-def get_file_fields_from_dictionary(
-    redcap_data_source: RedcapDataSource,
-) -> Dict[str, str]:
-    """
-    Identifies file upload fields from the REDCap data dictionary stored in
-    the database.  Returns a mapping of field_name : form_name.
-
-    Args:
-        redcap_data_source (RedcapDataSource): The REDCap data source.
-
-    Returns:
-        Dict[str, str]: Mapping of field_name → form_name for every file
-            upload field.  Empty dict when no dictionary is available or
-            no file fields exist.
-    """
-
-    data_dictionary: Optional[List[Dict[str, str]]] = (
-        redcap_data_source.data_source_metadata.dictionary
-    )
-
-    if data_dictionary is None:
-        logger.warning(
-            f"No data dictionary found in metadata for {redcap_data_source.data_source_name}. "
-            "Run pull_dictionary first."
-        )
-        return {}
-
-    # field_name: form_name for every file field
-    file_fields: Dict[str, str] = {
-        entry["field_name"]: entry.get("form_name", "unknown_form")
-        for entry in data_dictionary
-        if entry.get("field_type") == "file"
-    }
-
-    return file_fields
-
-
-def fetch_file_attachment(
-    endpoint_url: str,
-    api_token: str,
-    record_id: str,
-    field_name: str,
-    event_name: Optional[str] = None,
-    repeat_instance: Optional[str] = None,
-    timeout_s: int = 60,
-) -> Optional[tuple[bytes, str]]:
-    """
-    Downloads a single file from a REDCap file upload field.
-
-    Args:
-        endpoint_url (str): The REDCap API endpoint URL.
-        api_token (str): The API token for authentication.
-        record_id (str): The record ID (primary key) in REDCap.
-        field_name (str): The field name of the file upload field.
-        event_name (Optional[str]): The event name (for longitudinal projects).
-        repeat_instance (Optional[str]): The repeat instance number.
-        timeout_s (int): Timeout for the API request.
-
-    Returns:
-        Optional[tuple[bytes, str]]: A tuple of (file_content, original_filename),
-            or None if the download fails.
-    """
-    data: Dict[str, str] = {
-        "token": api_token,
-        "content": "file",
-        "action": "export",
-        "record": record_id,
-        "field": field_name,
-        "returnFormat": "json",
-    }
-    if event_name:
-        data["event"] = event_name
-    if repeat_instance:
-        data["repeat_instance"] = repeat_instance
-
-    try:
-        r = requests.post(endpoint_url, data=data, timeout=timeout_s)
-        r.raise_for_status()
-
-        # REDCap returns the filename in the Content-Type header as:
-        #   application/pdf; name="filename.pdf"
-        filename: Optional[str] = None
-        content_type = r.headers.get("Content-Type", "")
-        name_match = re.search(r'name="([^"]+)"', content_type)
-        if name_match:
-            filename = name_match.group(1)
-
-        if not filename:
-            filename = f"{field_name}_file"
-
-        return r.content, filename
-    except requests.exceptions.RequestException as e:
-        logger.error(
-            f"Failed to download file for record={record_id}, field={field_name}: {e}"
         )
         return None
 
@@ -603,7 +497,7 @@ def pull_file_attachments(
 
             # Download the file
             with timer.Timer() as file_pull_timer:
-                result = fetch_file_attachment(
+                result = redcap_api.export_file(
                     endpoint_url=endpoint_url,
                     api_token=api_token,
                     record_id=str(record_id),
@@ -661,6 +555,10 @@ def pull_file_attachments(
                 temp_att_path.unlink(missing_ok=True)
                 logger.debug(f"File attachment unchanged, skipping: {file_path}")
                 continue
+            else:
+                logger.info(
+                    f"File attachment is new or changed for {subject_id}, saving to {file_path}."
+                )
 
             # New or changed – move temp to the actual path
             fs.copy(
@@ -693,9 +591,9 @@ def pull_file_attachments(
                     "field_name": field_name,
                     "form_name": form_name,
                     "event_name": event_name,
-                    "repeat_instance": str(repeat_instance)
-                    if repeat_instance
-                    else None,
+                    "repeat_instance": (
+                        str(repeat_instance) if repeat_instance else None
+                    ),
                     "record_id": str(record_id),
                     "file_size_bytes": len(file_content),
                     "type": "file_attachment",
@@ -795,7 +693,7 @@ def pull_all_data(
     )
 
     for redcap_data_source in active_redcap_data_sources:
-        file_fields = get_file_fields_from_dictionary(redcap_data_source)
+        file_fields = redcap_utils.get_file_fields_from_dictionary(redcap_data_source)
         if file_fields:
             logger.info(
                 f"Found {len(file_fields)} file upload field(s) for "

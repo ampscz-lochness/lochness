@@ -25,6 +25,7 @@ try:
 except ValueError:
     pass
 
+import json
 import logging
 from typing import Any, Dict, List, Optional, cast, Set
 
@@ -33,6 +34,7 @@ import requests
 from rich.logging import RichHandler
 
 from lochness.helpers import logs, utils, db
+from lochness.sources.redcap import api as redcap_api
 from lochness.models.subjects import Subject
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
@@ -181,16 +183,6 @@ def fetch_metadata(
         redcap_data_source.data_source_metadata.optional_variables_dictionary
     )
 
-    data = {
-        "token": api_token,
-        "content": "record",
-        "action": "export",
-        "format": "json",
-        "type": "flat",
-        "csvDelimiter": "",
-        "returnFormat": "json",
-    }
-
     requested_variables = [subject_id_variable]
     required_variables: Set[str] = set()
 
@@ -212,17 +204,22 @@ def fetch_metadata(
         if variable_name not in requested_variables:
             requested_variables.append(variable_name)
 
-    for i, variable in enumerate(requested_variables):
-        data[f"fields[{i}]"] = variable  # type: ignore
-
-    r = requests.post(redcap_endpoint_url, data=data, timeout=timeout_s)
-    if r.status_code != 200:
+    try:
+        raw_data = redcap_api.export_records(
+            api_token=api_token,
+            endpoint_url=redcap_endpoint_url,
+            fields=requested_variables,  # type: ignore
+            timeout_s=timeout_s,
+        )
+    except requests.exceptions.RequestException as e:
         logger.error(
-            f"Failed to fetch metadata for {identifier}: {r.status_code} - {r.text}"
+            f"Failed to fetch metadata for {identifier}: {e}"
         )
         return None
 
-    raw_data = r.json()
+    if raw_data is None:
+        logger.error(f"No metadata records returned for {identifier}.")
+        return None
 
     results: List[Dict[str, str]] = []
     for record in raw_data:

@@ -33,6 +33,7 @@ import requests
 from rich.logging import RichHandler
 
 from lochness.helpers import logs, utils
+from lochness.sources.redcap import api as redcap_api
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
 from lochness.sources.redcap.models.data_source import RedcapDataSource
@@ -148,21 +149,21 @@ def fetch_dictionary(
 
     api_token = keystore.key_value
 
-    data = {
-        "token": api_token,
-        "content": "metadata",
-        "format": "json",
-        "returnFormat": "json",
-    }
-
-    r = requests.post(redcap_endpoint_url, data=data, timeout=timeout_s)
-    if r.status_code != 200:
+    try:
+        raw_data = redcap_api.export_metadata(
+            api_token=api_token,
+            endpoint_url=redcap_endpoint_url,
+            timeout_s=timeout_s,
+        )
+    except requests.exceptions.RequestException as e:
         logger.error(
-            f"Failed to fetch metadata for {identifier}: {r.status_code} - {r.text}"
+            f"Failed to fetch metadata for {identifier}: {e}"
         )
         return None
 
-    raw_data = r.json()
+    if raw_data is None:
+        logger.error(f"No metadata returned for {identifier}.")
+        return None
 
     if redcap_data_source.data_source_metadata.dictionary is None:
         Logs(
