@@ -46,7 +46,9 @@ def redact_identifiers(
         redacted_record = record.copy()
         for field in identifier_fields:
             if field in redacted_record:
-                redacted_record[field] = redacted_string
+                # Check if variable has value before redacting
+                if redacted_record[field] is not None and redacted_record[field] != "":
+                    redacted_record[field] = redacted_string
         redacted_data.append(redacted_record)
 
     return redacted_data
