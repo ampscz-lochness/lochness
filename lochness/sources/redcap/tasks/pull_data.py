@@ -343,6 +343,9 @@ def save_subject_data(
                 extra={"file_path": str(file_path), "file_md5": new_md5},
             )
             return None
+        else:
+            logger.info(f"File is new or changed for {subject_id}, saving to {file_path}.")
+
 
         # File is new or has changed – move temp file to the actual path
         fs.copy(
@@ -552,6 +555,10 @@ def pull_file_attachments(
                 temp_att_path.unlink(missing_ok=True)
                 logger.debug(f"File attachment unchanged, skipping: {file_path}")
                 continue
+            else:
+                logger.info(
+                    f"File attachment is new or changed for {subject_id}, saving to {file_path}."
+                )
 
             # New or changed – move temp to the actual path
             fs.copy(
