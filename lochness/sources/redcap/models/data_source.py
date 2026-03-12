@@ -99,6 +99,12 @@ class RedcapDataSource(BaseModel):
                     subject_id_variable=row["data_source_metadata"][
                         "subject_id_variable"
                     ],
+                    messy_subject_id=row["data_source_metadata"][
+                        "messy_subject_id"
+                    ],
+                    subject_id_variable_as_the_pk=row["data_source_metadata"][
+                        "subject_id_variable_as_the_pk"
+                    ],
                     optional_variables_dictionary=optional_variables,
                     main_redcap=row["data_source_metadata"]["main_redcap"],
                     dictionary=row["data_source_metadata"].get("dictionary")
