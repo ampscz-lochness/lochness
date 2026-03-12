@@ -194,3 +194,37 @@ def export_file(
             e,
         )
         return None
+
+
+def export_log(
+    api_token: str,
+    endpoint_url: str,
+    record_id: str,
+    timeout_s: int = 30,
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Export the data change log for a specific record.
+
+    Args:
+        api_token: REDCap API token.
+        endpoint_url: REDCap API endpoint URL.
+        record_id: The record ID to retrieve the log for.
+        timeout_s: HTTP request timeout in seconds.
+    Returns:
+        A list of log entries (dictionaries), or ``None`` if the request fails.
+    """
+    data: Dict[str, str] = {
+        "token": api_token,
+        "content": "log",
+        "record": record_id,
+        "format": "json",
+        "returnFormat": "json",
+    }
+
+    try:
+        r = requests.post(endpoint_url, data=data, timeout=timeout_s)
+        r.raise_for_status()
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        logger.error("Failed to export log for record=%s: %s", record_id, e)
+        return None
