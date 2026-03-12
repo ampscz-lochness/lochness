@@ -3,6 +3,7 @@
 
 # Generated data
 data/
+test/
 
 # scratch
 scratch/
@@ -175,4 +176,4 @@ cython_debug/
 
 lochness.config.initags
 tags
-config.ini
+*.ini
