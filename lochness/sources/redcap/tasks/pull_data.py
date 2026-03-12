@@ -158,6 +158,7 @@ def fetch_subject_data(
     redcap_data_source: RedcapDataSource,
     subject_id: str,
     config_file: Path,
+    redact_identifiers: bool = True,
     timeout_s: int = 60,
 ) -> Optional[List[Dict[str, Any]]]:
     """
@@ -167,6 +168,7 @@ def fetch_subject_data(
         redcap_data_source (RedcapDataSource): The REDCap data source.
         subject_id (str): The subject ID to fetch data for.
         config_file (Path): Path to the config file.
+        redact_identifiers (bool): Whether to redact identifiers from the fetched data.
         timeout_s (int): Timeout for the API request.
 
     Returns:
@@ -244,10 +246,11 @@ def fetch_subject_data(
             return None
 
         # Redact identifers
-        identifier_fields = redcap_utils.get_identifier_fields_from_data_source(
-            redcap_data_source
-        )
-        result = redcap_utils.redact_identifiers(result, identifier_fields)
+        if redact_identifiers:
+            identifier_fields = redcap_utils.get_identifier_fields_from_data_source(
+                redcap_data_source
+            )
+            result = redcap_utils.redact_identifiers(result, identifier_fields)
 
         return result
 
