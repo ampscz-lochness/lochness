@@ -303,12 +303,15 @@ def check_file_content_unchanged(
         # Content is unchanged – discard temp and skip
         fs.remove(temp_file_path)
         return None
-    elif replace_existing:
-        fs.copy(source=temp_file_path, destination=file_path)
-        return temp_file_model
     else:
-        # Content has changed and not replacing the existing file
-        return temp_file_model
+        if replace_existing:
+            fs.copy(source=temp_file_path, destination=file_path)
+            fs.remove(temp_file_path)
+            temp_file_model = File(file_path=file_path)
+            return temp_file_model
+        else:
+            # Content has changed and not replacing the existing file
+            return temp_file_model
 
 
 def save_subject_data(
