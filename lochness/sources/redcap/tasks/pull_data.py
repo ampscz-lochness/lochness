@@ -397,6 +397,7 @@ def save_subject_data(
                     },
                 )
             else:
+                logger.info(f"Data file is new or changed for {subject_id}, saving to {data_file_path}.")
                 created_files.append((data_file_model, "data"))
 
         # Log File Handling
@@ -435,6 +436,7 @@ def save_subject_data(
                     },
                 )
             else:
+                logger.info(f"Log file is new or changed for {subject_id}, saving to {log_file_path}.")
                 created_files.append((log_file_model, "log"))
 
         # write to DB
