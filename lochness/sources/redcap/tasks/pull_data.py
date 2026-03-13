@@ -27,21 +27,21 @@ except ValueError:
 import argparse
 import json
 import logging
-from typing import Any, List, Dict, Optional, Tuple
-from datetime import datetime
 import tempfile
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from rich.logging import RichHandler
 
-from lochness.helpers import logs, utils, db, config, timer, fs
-from lochness.sources.redcap import api as redcap_api
-from lochness.sources.redcap import utils as redcap_utils
-from lochness.models.subjects import Subject
+from lochness.helpers import config, db, fs, logs, timer, utils
+from lochness.models.data_pulls import DataPull
+from lochness.models.files import File
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
-from lochness.models.files import File
-from lochness.models.data_pulls import DataPull
+from lochness.models.subjects import Subject
+from lochness.sources.redcap import api as redcap_api
+from lochness.sources.redcap import utils as redcap_utils
 from lochness.sources.redcap.models.data_source import RedcapDataSource
 
 MODULE_NAME = "lochness.sources.redcap.tasks.pull_data"
@@ -377,7 +377,7 @@ def save_subject_data(
             data_file_model = check_file_content_unchanged(
                 file_path=data_file_path,
                 file_md5="" if existing_data_md5 is None else existing_data_md5,
-                file_content=json.dumps(data).encode("utf-8"),
+                file_content=json.dumps(data, indent=4).encode("utf-8"),
                 replace_existing=True,
             )
             if data_file_model is None:
@@ -397,7 +397,9 @@ def save_subject_data(
                     },
                 )
             else:
-                logger.info(f"Data file is new or changed for {subject_id}, saving to {data_file_path}.")
+                logger.info(
+                    f"Data file is new or changed for {subject_id}, saving to {data_file_path}."
+                )
                 created_files.append((data_file_model, "data"))
 
         # Log File Handling
@@ -416,7 +418,7 @@ def save_subject_data(
             log_file_model = check_file_content_unchanged(
                 file_path=log_file_path,
                 file_md5="" if existing_log_md5 is None else existing_log_md5,
-                file_content=json.dumps(log).encode("utf-8"),
+                file_content=json.dumps(log, indent=4).encode("utf-8"),
                 replace_existing=True,
             )
             if log_file_model is None:
@@ -436,7 +438,9 @@ def save_subject_data(
                     },
                 )
             else:
-                logger.info(f"Log file is new or changed for {subject_id}, saving to {log_file_path}.")
+                logger.info(
+                    f"Log file is new or changed for {subject_id}, saving to {log_file_path}."
+                )
                 created_files.append((log_file_model, "log"))
 
         # write to DB
