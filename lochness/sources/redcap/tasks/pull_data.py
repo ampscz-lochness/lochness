@@ -27,21 +27,21 @@ except ValueError:
 import argparse
 import json
 import logging
-from typing import Any, List, Dict, Optional
-from datetime import datetime
 import tempfile
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from rich.logging import RichHandler
 
-from lochness.helpers import logs, utils, db, config, timer, fs
-from lochness.sources.redcap import api as redcap_api
-from lochness.sources.redcap import utils as redcap_utils
-from lochness.models.subjects import Subject
+from lochness.helpers import config, db, fs, logs, timer, utils
+from lochness.models.data_pulls import DataPull
+from lochness.models.files import File
 from lochness.models.keystore import KeyStore
 from lochness.models.logs import Logs
-from lochness.models.files import File
-from lochness.models.data_pulls import DataPull
+from lochness.models.subjects import Subject
+from lochness.sources.redcap import api as redcap_api
+from lochness.sources.redcap import utils as redcap_utils
 from lochness.sources.redcap.models.data_source import RedcapDataSource
 
 MODULE_NAME = "lochness.sources.redcap.tasks.pull_data"
@@ -111,9 +111,7 @@ def log_event(
     ).insert(config_file)
 
 
-def add_filter_logic_for_penncnb_redcap(
-    filter_logic: str, subject_id: str, subject_id_var: str
-):
+def add_filter_logic_for_penncnb_redcap(subject_id: str, subject_id_var: str):
     """
     Enhances the existing filter logic for fetching data from REDCap by adding
     conditions to handle subject IDs with various suffix patterns used in the
@@ -125,7 +123,6 @@ def add_filter_logic_for_penncnb_redcap(
     data.
 
     Args:
-        filter_logic (str): The initial filter logic string to be enhanced.
         subject_id (str): The subject ID for which data is being fetched.
         subject_id_var (str): The variable name in REDCap that stores the
                             subject ID.
@@ -158,19 +155,22 @@ def fetch_subject_data(
     redcap_data_source: RedcapDataSource,
     subject_id: str,
     config_file: Path,
+    redact_identifiers: bool = True,
     timeout_s: int = 60,
-) -> Optional[List[Dict[str, Any]]]:
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[List[Dict[str, Any]]]]:
     """
-    Fetches data for a single subject from REDCap.
+    Fetches data and audit log for a single subject from REDCap.
 
     Args:
         redcap_data_source (RedcapDataSource): The REDCap data source.
         subject_id (str): The subject ID to fetch data for.
         config_file (Path): Path to the config file.
+        redact_identifiers (bool): Whether to redact identifiers from the fetched data.
         timeout_s (int): Timeout for the API request.
 
     Returns:
-        Optional[List[Dict[str, Any]]]: The raw data from REDCap, or None if fetching fails.
+        Tuple[Optional[List[Dict[str, Any]]], Optional[List[Dict[str, Any]]]]:
+            The raw data and audit log from REDCap
     """
     project_id = redcap_data_source.project_id
     site_id = redcap_data_source.site_id
@@ -199,7 +199,7 @@ def fetch_subject_data(
             data_source_name=data_source_name,
             subject_id=subject_id,
         )
-        return None
+        return None, None
 
     api_token = keystore.key_value
 
@@ -213,44 +213,24 @@ def fetch_subject_data(
 
         if redcap_data_source.data_source_metadata.messy_subject_id:
             filter_logic = add_filter_logic_for_penncnb_redcap(
-                "",
                 subject_id,
                 subject_id_var,  # type: ignore
             )
 
     try:
-        result = redcap_api.export_records(
+        data_result = redcap_api.export_records(
             api_token=api_token,
             endpoint_url=redcap_endpoint_url,
             filter_logic=filter_logic,
             records=records_list,
             timeout_s=timeout_s,
         )
-
-        if result is None:
-            log_event(
-                config_file=config_file,
-                log_level="WARN",
-                event="redcap_data_pull_no_data",
-                message=f"No data found for {identifier}.",
-                project_id=project_id,
-                site_id=site_id,
-                data_source_name=data_source_name,
-                subject_id=subject_id,
-                extra={"filter_logic": filter_logic or ""},
-            )
-
-            logger.warning(f"No data found for {identifier}")
-            return None
-
-        # Redact identifers
-        identifier_fields = redcap_utils.get_identifier_fields_from_data_source(
-            redcap_data_source
+        logs_result = redcap_api.export_log(
+            api_token=api_token,
+            endpoint_url=redcap_endpoint_url,
+            record_id=subject_id,
+            timeout_s=timeout_s,
         )
-        result = redcap_utils.redact_identifiers(result, identifier_fields)
-
-        return result
-
     except requests.exceptions.RequestException as e:
         logger.error(f"filter_logic: {filter_logic}")
         logger.error(f"Failed to fetch data for {identifier}: {e}")
@@ -265,21 +245,101 @@ def fetch_subject_data(
             subject_id=subject_id,
             extra={"error": str(e)},
         )
+        return None, None
+
+    if data_result is None:
+        log_event(
+            config_file=config_file,
+            log_level="WARN",
+            event="redcap_data_pull_no_data",
+            message=f"No data found for {identifier}.",
+            project_id=project_id,
+            site_id=site_id,
+            data_source_name=data_source_name,
+            subject_id=subject_id,
+            extra={"filter_logic": filter_logic or ""},
+        )
+
+        logger.warning(f"No data found for {identifier}")
+        return None, logs_result
+
+    # Redact identifers
+    if redact_identifiers:
+        identifier_fields = redcap_utils.get_identifier_fields_from_data_source(
+            redcap_data_source
+        )
+        data_result = redcap_utils.redact_identifiers(data_result, identifier_fields)
+
+    return data_result, logs_result
+
+
+def check_file_content_unchanged(
+    file_path: Path,
+    file_md5: str,
+    file_content: bytes,
+    replace_existing: bool = False,
+) -> Optional[File]:
+    """
+    Check if provided file content matches provided MD5 hash and
+    optionally replace existing file if content has changed.
+
+    Args:
+        file_path (Path): The path to the existing file.
+        file_content (bytes): The new file content to compare.
+        file_md5 (str): The MD5 hash of the new file content.
+
+    Returns:
+        bool: True if the content is unchanged, False otherwise.
+    """
+    temp_file_path: Optional[Path] = None
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_f:
+        tmp_f.write(file_content)
+        temp_file_path = Path(tmp_f.name)
+
+    temp_file_model = File(file_path=temp_file_path)
+    temp_file_md5 = temp_file_model.md5
+
+    if temp_file_md5 == file_md5:
+        # Content is unchanged – discard temp and skip
+        fs.remove(temp_file_path)
         return None
+    else:
+        if replace_existing:
+            fs.copy(source=temp_file_path, destination=file_path)
+            fs.remove(temp_file_path)
+            temp_file_model = File(file_path=file_path)
+            return temp_file_model
+        else:
+            # Content has changed and not replacing the existing file
+            return temp_file_model
 
 
 def save_subject_data(
-    data: List[Dict[str, Any]],
+    data: Optional[List[Dict[str, Any]]],
+    log: Optional[List[Dict[str, Any]]],
     project_id: str,
     site_id: str,
     subject_id: str,
     data_source_name: str,
     config_file: Path,
-) -> Optional[tuple[Path, str]]:
+) -> List[Tuple[File, str]]:
     """
     Saves the fetched subject data to the file system and records it in the database.
-    Uses the new path pattern for REDCap JSON files.
+
+    Args:
+        data (List[Dict[str, Any]]): The data to be saved.
+        log (List[Dict[str, Any]]): The log to be saved.
+        project_id (str): The project ID.
+        site_id (str): The site ID.
+        subject_id (str): The subject ID.
+        data_source_name (str): The name of the data source.
+        config_file (Path): Path to the config file.
+
+    Returns:
+        List[Tuple[File, str]]: A list of tuples containing the File model and
+            its type (e.g., "data" or "log") for each file that was created or updated.
     """
+    created_files: List[Tuple[File, str]] = []
     temp_path: Optional[Path] = None
     try:
         lochness_root: Path = config.parse(config_file, "general")["lochness_root"]  # type: ignore
@@ -302,88 +362,96 @@ def save_subject_data(
             / "surveys"
         )
         output_dir.mkdir(parents=True, exist_ok=True)
-        file_name = f"{subject_id}.{project_name_cap}.{data_source_name}.json"
-        file_path = output_dir / file_name
 
-        # Write to a temp file first so we can hash before committing
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".json",
-            delete=False,
-            encoding="utf-8",
-            dir=output_dir,
-        ) as tmp_f:
-            temp_path = Path(tmp_f.name)
-            json.dump(data, tmp_f, indent=4)
+        # Data File Handling
+        if data:
+            data_file_name = f"{subject_id}.{project_name_cap}.{data_source_name}.json"
+            data_file_path = output_dir / data_file_name
 
-        # Compute hash of the temp file
-        temp_file_model = File(file_path=temp_path)
-        new_md5 = temp_file_model.md5
-
-        # Check DB for the most recent hash recorded at this file_path
-        existing_file = File.get_most_recent_file_obj(
-            config_file=config_file, file_path=file_path
-        )
-        existing_md5 = existing_file.md5 if existing_file is not None else None
-
-        if existing_md5 is not None and existing_md5 == new_md5:
-            # File content unchanged – discard temp and skip DB recording
-            temp_path.unlink(missing_ok=True)
-            temp_path = None
-            logger.info(f"File unchanged for {subject_id}, skipping.")
-            log_event(
-                config_file=config_file,
-                log_level="INFO",
-                event="redcap_data_pull_file_unchanged",
-                message=f"File unchanged for {subject_id}, skipping DB record.",
-                project_id=project_id,
-                site_id=site_id,
-                data_source_name=data_source_name,
-                subject_id=subject_id,
-                extra={"file_path": str(file_path), "file_md5": new_md5},
+            existing_data_file = File.get_most_recent_file_obj(
+                config_file=config_file, file_path=data_file_path
             )
-            return None
-        else:
-            logger.info(f"File is new or changed for {subject_id}, saving to {file_path}.")
+            existing_data_md5 = (
+                existing_data_file.md5 if existing_data_file is not None else None
+            )
+            data_file_model = check_file_content_unchanged(
+                file_path=data_file_path,
+                file_md5="" if existing_data_md5 is None else existing_data_md5,
+                file_content=json.dumps(data, indent=4).encode("utf-8"),
+                replace_existing=True,
+            )
+            if data_file_model is None:
+                logger.info(f"Data file unchanged for {subject_id}, skipping save.")
+                log_event(
+                    config_file=config_file,
+                    log_level="INFO",
+                    event="redcap_data_pull_data_unchanged",
+                    message=f"Data file unchanged for {subject_id}, skipping save.",
+                    project_id=project_id,
+                    site_id=site_id,
+                    data_source_name=data_source_name,
+                    subject_id=subject_id,
+                    extra={
+                        "file_path": str(data_file_path),
+                        "file_md5": existing_data_md5,
+                    },
+                )
+            else:
+                logger.info(
+                    f"Data file is new or changed for {subject_id}, saving to {data_file_path}."
+                )
+                created_files.append((data_file_model, "data"))
 
+        # Log File Handling
+        if log:
+            log_file_name = (
+                f"{subject_id}.{project_name_cap}.{data_source_name}.log.json"
+            )
+            log_file_path = output_dir / log_file_name
 
-        # File is new or has changed – move temp file to the actual path
-        fs.copy(
-            source=temp_path,
-            destination=file_path,
-        )
-        fs.remove(temp_path)
-        temp_path = None
+            existing_log_file = File.get_most_recent_file_obj(
+                config_file=config_file, file_path=log_file_path
+            )
+            existing_log_md5 = (
+                existing_log_file.md5 if existing_log_file is not None else None
+            )
+            log_file_model = check_file_content_unchanged(
+                file_path=log_file_path,
+                file_md5="" if existing_log_md5 is None else existing_log_md5,
+                file_content=json.dumps(log, indent=4).encode("utf-8"),
+                replace_existing=True,
+            )
+            if log_file_model is None:
+                logger.info(f"Log file unchanged for {subject_id}, skipping save.")
+                log_event(
+                    config_file=config_file,
+                    log_level="INFO",
+                    event="redcap_data_pull_log_unchanged",
+                    message=f"Log file unchanged for {subject_id}, skipping save.",
+                    project_id=project_id,
+                    site_id=site_id,
+                    data_source_name=data_source_name,
+                    subject_id=subject_id,
+                    extra={
+                        "file_path": str(log_file_path),
+                        "file_md5": existing_log_md5,
+                    },
+                )
+            else:
+                logger.info(
+                    f"Log file is new or changed for {subject_id}, saving to {log_file_path}."
+                )
+                created_files.append((log_file_model, "log"))
 
-        # Record the file in the database
-        file_model = File.new(
-            file_path=file_path,
-            file_size_mb=temp_file_model.file_size_mb,
-            m_time=datetime.fromtimestamp(file_path.stat().st_mtime),
-            md5=new_md5,
-            file_metadata={"available_at": [f"hn:{utils.get_hostname()}"]},
-        )
-        file_md5 = file_model.md5
+        # write to DB
+        queries = []
+        for file_model, _ in created_files:
+            queries += file_model.to_sql_queries_with_availability_update()
         db.execute_queries(
             config_file,
-            file_model.to_sql_queries_with_availability_update(),
+            queries,
             show_commands=False,
         )
-        log_event(
-            config_file=config_file,
-            log_level="INFO",
-            event="redcap_data_pull_save_success",
-            message=f"Successfully saved data for {subject_id} to {file_path}.",
-            project_id=project_id,
-            site_id=site_id,
-            data_source_name=data_source_name,
-            subject_id=subject_id,
-            extra={
-                "file_path": str(file_path),
-                "file_md5": file_md5 if file_md5 else None,
-            },
-        )
-        return file_path, file_md5 if file_md5 else ""
     except Exception as e:  # pylint: disable=broad-except
         logger.error(f"Failed to save data for {subject_id}: {e}")
         if temp_path is not None and temp_path.exists():
@@ -399,7 +467,8 @@ def save_subject_data(
             subject_id=subject_id,
             extra={"error": str(e)},
         )
-        return None
+
+    return created_files
 
 
 def pull_file_attachments(
@@ -758,61 +827,73 @@ def pull_all_data(
         )
 
         for subject in subjects_in_db:
-            start_time = datetime.now()
-            raw_data = fetch_subject_data(
-                redcap_data_source=redcap_data_source,
+            with timer.Timer() as pull_timer:
+                raw_data, log_data = fetch_subject_data(
+                    redcap_data_source=redcap_data_source,
+                    subject_id=subject.subject_id,
+                    config_file=config_file,
+                )
+
+            new_files: List[Tuple[File, str]] = save_subject_data(
+                data=raw_data,
+                log=log_data,
+                project_id=subject.project_id,
+                site_id=subject.site_id,
                 subject_id=subject.subject_id,
+                data_source_name=redcap_data_source.data_source_name,
                 config_file=config_file,
             )
 
-            if raw_data:
-                result = save_subject_data(
-                    data=raw_data,
-                    project_id=subject.project_id,
-                    site_id=subject.site_id,
-                    subject_id=subject.subject_id,
-                    data_source_name=redcap_data_source.data_source_name,
-                    config_file=config_file,
-                )
-                if result:
-                    file_path, file_md5 = result
-                    end_time = datetime.now()
-                    pull_time_s = int((end_time - start_time).total_seconds())
+            data_pulls: List[DataPull] = []
+            for file_model, file_type in new_files:
+                if file_type == "data":
+                    associated_data = raw_data
+                elif file_type == "log":
+                    associated_data = log_data
+                else:
+                    raise ValueError(f"Unexpected file type: {file_type}")
+                file_path = file_model.file_path
+                file_md5 = file_model.md5 or ""
 
+                lochness_root_path: Path = Path(
+                    config.parse(config_file, "general")["lochness_root"]  # type: ignore
+                )
+                pull_metadata = {
+                    "redcap_endpoint": redcap_data_source.data_source_metadata.endpoint_url,
+                    "records_pulled_bytes": len(associated_data),  # type: ignore
+                    "type": file_type,
+                    "relative_path": str(file_path.relative_to(lochness_root_path)),
+                }
+                if file_type == "data":
                     # Pull file attachments if any file upload fields exist
-                    files_downloaded = 0
                     if file_fields:
-                        files_downloaded = pull_file_attachments(
+                        files_downloaded_count = pull_file_attachments(
                             redcap_data_source=redcap_data_source,
                             subject_id=subject.subject_id,
                             subject_data_json=file_path,
                             file_fields=file_fields,
                             config_file=config_file,
                         )
+                        pull_metadata["file_attachments_count"] = files_downloaded_count
 
-                    lochness_root_path: Path = Path(
-                        config.parse(config_file, "general")["lochness_root"]  # type: ignore
-                    )
-                    data_pull = DataPull(
-                        subject_id=subject.subject_id,
-                        data_source_name=redcap_data_source.data_source_name,
-                        site_id=subject.site_id,
-                        project_id=subject.project_id,
-                        file_path=str(file_path),
-                        file_md5=file_md5,
-                        pull_time_s=pull_time_s,
-                        pull_metadata={
-                            "redcap_endpoint": redcap_data_source.data_source_metadata.endpoint_url,
-                            "records_pulled_bytes": len(raw_data),
-                            "file_attachments_downloaded": files_downloaded,
-                            "relative_path": str(
-                                file_path.relative_to(lochness_root_path)
-                            ),
-                        },
-                    )
-                    db.execute_queries(
-                        config_file, [data_pull.to_sql_query()], show_commands=False
-                    )
+                data_pull = DataPull(
+                    subject_id=subject.subject_id,
+                    data_source_name=redcap_data_source.data_source_name,
+                    site_id=subject.site_id,
+                    project_id=subject.project_id,
+                    file_path=str(file_path),
+                    file_md5=file_md5,
+                    pull_time_s=int(pull_timer.duration),  # type: ignore
+                    pull_metadata=pull_metadata,
+                )
+                data_pulls.append(data_pull)
+
+            # Insert data pulls into DB
+            db.execute_queries(
+                config_file=config_file,
+                queries=[dp.to_sql_query() for dp in data_pulls],
+                show_commands=False,
+            )
 
 
 if __name__ == "__main__":
