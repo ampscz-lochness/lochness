@@ -25,6 +25,7 @@ import datetime
 from airflow.sdk import Asset, DAG, Param
 from airflow.sdk.definitions.param import ParamsDict
 from airflow.providers.standard.operators.bash import BashOperator
+from airflow.providers.standard.operators.python import ShortCircuitOperator
 
 # Define custom asset for REDCap data
 redcap_data_asset = Asset(
@@ -78,8 +79,8 @@ with DAG(
                 default=False,
                 type=["null", "boolean"],
                 description=(
-                    "When enabled, performs validation checks "
-                    "without updating the database."
+                    "When enabled, pulls REDCap data but "
+                    "without emitting the data asset"
                 ),
                 title="Dry Run Mode",
             ),
@@ -125,8 +126,25 @@ echo "=================================="''',
             "{% if params.site_id %} --site_id {{ params.site_id }}{% endif %}"
         ),
         cwd="{{ var.value['LOCHNESS_REPO_ROOT'] }}",
+    )
+
+    check_not_dry_run = ShortCircuitOperator(
+        task_id="check_not_dry_run",
+        task_display_name="Skip Asset Emission if Dry Run",
+        python_callable=lambda **context: not context["params"]["dry_run"],
+    )
+
+    emit_redcap_asset = BashOperator(
+        task_id="emit_redcap_asset",
+        task_display_name="Emit REDCap Data Asset",
+        bash_command='echo "Emitting REDCap data asset"',
         outlets=[redcap_data_asset],
     )
 
     # pylint: disable=pointless-statement
-    print_info >> redcap_pull_data  # type: ignore[reportUnusedExpression]
+    (  # type: ignore[reportUnusedExpression]
+        print_info
+        >> redcap_pull_data
+        >> check_not_dry_run
+        >> emit_redcap_asset
+    )
