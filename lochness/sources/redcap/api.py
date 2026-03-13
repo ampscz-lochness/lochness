@@ -224,7 +224,12 @@ def export_log(
     try:
         r = requests.post(endpoint_url, data=data, timeout=timeout_s)
         r.raise_for_status()
-        return r.json()
+        log_data: List[Dict[str, Any]] = r.json()
+
+        # Sort by timestamp (descending) to ensure chronological order
+        log_data.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+        return log_data
     except requests.exceptions.RequestException as e:
         logger.error("Failed to export log for record=%s: %s", record_id, e)
         return None
