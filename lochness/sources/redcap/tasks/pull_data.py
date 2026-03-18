@@ -155,7 +155,6 @@ def fetch_subject_data(
     redcap_data_source: RedcapDataSource,
     subject_id: str,
     config_file: Path,
-    redact_identifiers: bool = True,
     timeout_s: int = 60,
 ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[List[Dict[str, Any]]]]:
     """
@@ -264,11 +263,15 @@ def fetch_subject_data(
         return None, logs_result
 
     # Redact identifers
-    if redact_identifiers:
+    if redcap_data_source.data_source_metadata.redact_all_identifiers:
         identifier_fields = redcap_utils.get_identifier_fields_from_data_source(
             redcap_data_source
         )
         data_result = redcap_utils.redact_identifiers(data_result, identifier_fields)
+    if redcap_data_source.data_source_metadata.redact_fields_list:
+        data_result = redcap_utils.redact_identifiers(
+            data_result, redcap_data_source.data_source_metadata.redact_fields_list
+        )
 
     return data_result, logs_result
 

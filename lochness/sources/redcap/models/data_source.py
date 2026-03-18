@@ -24,6 +24,8 @@ class RedcapDataSourceMetadata(BaseModel):
     subject_id_variable: Optional[str]
     subject_id_variable_as_the_pk: bool = True
     messy_subject_id: bool = False
+    redact_all_identifiers: bool = False
+    redact_fields_list: List[str] = Field(default_factory=list)
     dictionary: Optional[List[Dict[str, Any]]] = Field(
         repr=False,
         default=None
@@ -107,6 +109,12 @@ class RedcapDataSource(BaseModel):
                     ],
                     optional_variables_dictionary=optional_variables,
                     main_redcap=row["data_source_metadata"]["main_redcap"],
+                    redact_all_identifiers=row["data_source_metadata"][
+                        "redact_all_identifiers"
+                    ],
+                    redact_fields_list=row["data_source_metadata"][
+                        "redact_fields_list"
+                    ],
                     dictionary=row["data_source_metadata"].get("dictionary")
                 ),
             )
