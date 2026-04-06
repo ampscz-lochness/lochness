@@ -125,17 +125,28 @@ def fetch_subject_data(
         project_id[:1].upper() + project_id[1:].lower() if project_id else project_id
     )
 
-    project_folder = sharepoint_utils.find_folder_in_drive(
-        drive_id, project_name_cap, headers
-    )
-    if not project_folder:
-        raise RuntimeError(
-            f"Project folder `{project_name_cap}` not found in `{metadata.drive_name}` drive."
+    if metadata.has_project_folder:
+        logger.debug(f"Looking for project folder '{project_name_cap}' in drive '{metadata.drive_name}'...")
+        project_folder = sharepoint_utils.find_folder_in_drive(
+            drive_id, project_name_cap, headers
+        )
+        if not project_folder:
+            raise RuntimeError(
+                f"Project folder `{project_name_cap}` not found in `{metadata.drive_name}` drive."
+            )
+
+        site_folder = sharepoint_utils.find_subfolder(
+            drive_id, project_folder["id"], f"{project_name_cap}{site_id}", headers
+        )
+    else:
+        project_folder = sharepoint_utils.find_folder_in_drive(
+            drive_id, project_name_cap, headers
+        )
+        logger.debug(f"Not expecting project folder under sharepoint")
+        site_folder = sharepoint_utils.find_folder_in_drive(
+            drive_id, f"{project_name_cap}{site_id}", headers
         )
 
-    site_folder = sharepoint_utils.find_subfolder(
-        drive_id, project_folder["id"], f"{project_name_cap}{site_id}", headers
-    )
     if not site_folder:
         raise RuntimeError(
             f"Site folder {project_name_cap}{site_id} not found in `{project_name_cap}` folder."
@@ -144,7 +155,6 @@ def fetch_subject_data(
     lochness_root: str = config.parse(config_file, "general")["lochness_root"]  # type: ignore
     output_dir = (
         Path(lochness_root)
-        / project_name_cap
         / "PHOENIX"
         / "PROTECTED"
         / f"{project_name_cap}{site_id}"
@@ -152,6 +162,7 @@ def fetch_subject_data(
         / subject_id
         / modality
     )
+    print(output_dir)
 
 
     if len([part for part in PurePosixPath(form_name).parts if part not in ("", "/")]) > 1:
@@ -169,7 +180,7 @@ def fetch_subject_data(
         for form_folder in matched_form_folders:
             subject_folders.extend(
                 sharepoint_utils.get_child_folders(
-                    drive_id, form_folder, headers, prefix=site_id
+                    drive_id, form_folder, headers, prefix=subject_id
                 )
             )
     else:
@@ -177,7 +188,9 @@ def fetch_subject_data(
             drive_id, site_folder, form_name, headers
         )
 
+    print("="*80)
     for subject_folder in subject_folders:
+        logger.debug(f"Checking subject folder: {subject_folder['name']} for subject_id: {subject_id}")
         if subject_folder["name"] == subject_id:
             logger.info(f"Found corresponding subfolder for {subject_id}")
 
@@ -212,6 +225,8 @@ def fetch_subject_data(
                     config_file=config_file,
                     hash_only=hash_only
                 )
+    import sys
+    sys.exit('ha')
 
 
 def pull_all_data(
