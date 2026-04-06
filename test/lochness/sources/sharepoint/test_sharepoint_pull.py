@@ -125,5 +125,10 @@ def main():
             os.remove(test_file_path)
             print(f"Cleaned up dummy file: {test_file_path}")
 
+
+def test_import():
+    pass
+
+
 if __name__ == "__main__":
     main()
