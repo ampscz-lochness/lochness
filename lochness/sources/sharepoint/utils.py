@@ -4,6 +4,7 @@ Utility functions for SharePoint data source interactions.
 
 import json
 import logging
+import requests
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -19,6 +20,7 @@ from lochness.sources.sharepoint import api as sharepoint_api
 
 logger = logging.getLogger(__name__)
 
+from pathlib import PurePosixPath
 
 def log_event(
     config_file: Path,
@@ -117,6 +119,11 @@ def find_subfolder(
     for item in sharepoint_api.list_folder_items(
         drive_id, parent_id, headers, timeout=timeout
     ):
+        parent_ref = item.get('parentReference', "")
+        parent_path = parent_ref['path'].split(':')[-1]
+        file_name = item.get('name', '')
+        full_path = Path(parent_path) / file_name
+        logger.info(f"Checking if {subfolder_name} matches {full_path}")
         if item.get("name", "").lower() == subfolder_name.lower() and "folder" in item:
             logger.info(f"Found subfolder '{subfolder_name}' in parent {parent_id}")
             return item
@@ -187,7 +194,9 @@ def get_matching_subfolders(
     Raises:
         RuntimeError: If the 'Responses' folder or matching form folder is not found.
     """
+    logger.debug(f"Searching for subfolders in '{ms_folder_dict['name']}' with name matching '{subdir_name}'")
     if relaxed_search:
+        logger.info(f"Performing relaxed search")
         subfolders = find_subfolders(
             drive_id, ms_folder_dict["id"], subdir_name,
             headers,
@@ -346,6 +355,7 @@ def download_subdirectory(
     data_source_name: str,
     output_dir: Path,
     config_file: Path,
+    hash_only: bool = False
 ) -> None:
     """
     Download updated files to the output_dir and clean up previous files
@@ -358,6 +368,7 @@ def download_subdirectory(
         data_source_name (str): The data source name for logging purposes.
         output_dir (Path): The directory to save downloaded files.
         config_file (Path): Path to the configuration file for database operations.
+        hash_only (bool): If True, only check if files need to be downloaded based on hash without actually downloading.
     Returns:
         None
     Raises:
@@ -396,6 +407,24 @@ def download_subdirectory(
         if should_download_file(local_file_path, quick_xor_hash):
             download_url = f.get("@microsoft.graph.downloadUrl")
             if download_url:
+                if hash_only:
+                    if local_file_path.is_file():
+                        file_model = File(file_path=file_target_path,
+                                          with_hash=True)
+                        file_md5: str = file_model.md5  # type: ignore
+                        # Save the QuickXorHash to a hidden file
+                        with open(hash_file_path, "w", encoding="utf-8") as hf:
+                            hf.write(quick_xor_hash)
+
+                        hash_file_model = File(file_path=hash_file_path)
+                        queries = (
+                            file_model.to_sql_queries_with_availability_update()
+                            + hash_file_model.to_sql_queries_with_availability_update()
+                        )
+                        db.execute_queries(config_file, queries, show_commands=False)
+
+                    continue
+
                 start_time = datetime.now()
                 download_file(download_url, file_target_path)
                 file_model = File(file_path=file_target_path, with_hash=True)
@@ -585,6 +614,7 @@ def download_new_or_updated_files(
     potential_file_uploads_without_form_update: bool,
     without_form: bool,
     config_file: Path,
+    hash_only: bool = False,
 ) -> None:
     """
     Download all files under the subfolder from a submitted form
@@ -600,6 +630,7 @@ def download_new_or_updated_files(
         data_source_name (str): The data source name for logging purposes.
         output_dir_root (Path): The root directory to save downloaded files.
         config_file (Path): Path to the configuration file for database operations.
+        hash_only (bool): If True, only check if files need to be downloaded based on hash without actually downloading.
 
     Returns:
         None
@@ -641,4 +672,107 @@ def download_new_or_updated_files(
             data_source_name,
             output_dir,
             config_file=config_file,
+            hash_only=hash_only
         )
+
+
+def get_child_folders(
+        drive_id: str,
+        parent_folder: Dict,
+        headers: Dict,
+        timeout: int = 120,
+        prefix: Optional[str] = None) -> List[Dict]:
+    """Get child folders under a parent folder, with optional prefix filtering.
+    
+    Args:
+        drive_id (str): The SharePoint drive ID.
+        parent_folder (Dict): The parent folder metadata dictionary.
+        headers (Dict): Headers containing the access token.
+        timeout (int): Request timeout in seconds.
+        prefix (str, optional): If provided, only return folders whose names start with this prefix.
+
+    Returns:
+        List[Dict]: A list of child folder metadata dictionaries.
+    """
+    items = sharepoint_api.list_folder_items(
+        drive_id, parent_folder["id"], headers, timeout=timeout
+    )
+
+    folders = [item for item in items if "folder" in item]
+
+    if prefix is not None:
+        folders = [f for f in folders if f.get("name", "").startswith(prefix)]
+
+    print(
+        f"[PATH-TRACE] CHILDREN of {parent_folder.get('name')} -> "
+        f"{[f.get('name') for f in folders[:20]]}"
+        + (" ..." if len(folders) > 20 else "")
+    )
+
+    return folders
+
+
+def find_matching_dirs_with_path(
+        drive_id: str,
+        parent_folder: Dict,
+        target_path: str,
+        headers: Dict,
+        timeout: int = 120) -> List[Dict]:
+    target_parts = [p for p in PurePosixPath(target_path).parts if p not in ("", "/")]
+    DEBUG_PREFIX = "[PATH-TRACE]"
+
+    print(f"{DEBUG_PREFIX} START target_path='{target_path}' parts={target_parts}")
+
+    if not target_parts:
+        print(f"{DEBUG_PREFIX} EMPTY target_parts -> returning []")
+        return []
+
+    current_folders = [parent_folder]
+    print(f"{DEBUG_PREFIX} INIT current_folders = {[f.get('name') for f in current_folders]}")
+
+    for level, part in enumerate(target_parts):
+        print(f"\n{DEBUG_PREFIX} ===== LEVEL {level} | looking for '{part}' =====")
+        next_folders = []
+
+        for idx, folder in enumerate(current_folders):
+            folder_name = folder.get("name", "<NO_NAME>")
+            folder_path = folder.get("parentReference", {}).get("path", "")
+            print(f"{DEBUG_PREFIX} [L{level} F{idx}] IN folder: {folder_path}/{folder_name}")
+
+            try:
+                matched_folder = find_subfolder(
+                    drive_id,
+                    folder["id"],
+                    part,
+                    headers,
+                    timeout=timeout,
+                )
+
+                if matched_folder:
+                    print(
+                        f"{DEBUG_PREFIX} [L{level} F{idx}] MATCHED folder -> "
+                        f"{matched_folder.get('name')} | id={matched_folder.get('id')}"
+                    )
+                    next_folders.append(matched_folder)
+                else:
+                    print(f"{DEBUG_PREFIX} [L{level} F{idx}] NO MATCH for '{part}'")
+
+            except Exception as e:
+                print(f"{DEBUG_PREFIX} [L{level} F{idx}] ERROR: {e}")
+
+        if not next_folders:
+            print(f"{DEBUG_PREFIX} LEVEL {level} FAILED: no matches for '{part}'")
+            print(f"{DEBUG_PREFIX} RETURN []")
+            return []
+
+        print(
+            f"{DEBUG_PREFIX} LEVEL {level} SUCCESS -> "
+            f"{[f.get('name', '<NO_NAME>') for f in next_folders]}"
+        )
+        current_folders = next_folders
+
+    print(
+        f"\n{DEBUG_PREFIX} DONE -> final folders: "
+        f"{[f.get('name', '<NO_NAME>') for f in current_folders]}"
+    )
+    return current_folders

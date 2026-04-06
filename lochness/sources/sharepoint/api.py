@@ -112,6 +112,7 @@ def get_site_id(
     site_url = f"https://graph.microsoft.com/v1.0/sites/{site_path}"
 
     resp = requests.get(site_url, headers=headers, timeout=timeout)
+    logger.debug(f"resp: {resp}")
     if resp.status_code != 200:
         logger.error(f"Failed to get SharePoint site: {resp.text}")
         raise RuntimeError(f"Failed to get SharePoint site: {resp.text}")

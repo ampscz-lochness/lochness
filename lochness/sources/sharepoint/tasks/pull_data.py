@@ -58,7 +58,10 @@ logger = logging.getLogger(MODULE_NAME)
 
 
 def fetch_subject_data(
-    sharepoint_data_source: SharepointDataSource, subject_id: str, config_file: Path
+    sharepoint_data_source: SharepointDataSource,
+    subject_id: str,
+    config_file: Path,
+    hash_only: bool = False
 ) -> None:
     """
     Fetches data for a single subject from SharePoint.
@@ -66,6 +69,7 @@ def fetch_subject_data(
     Args:
         sharepoint_data_source: SharepointDataSource object.
         subject_id (str): The subject ID to fetch data for.
+        hash_only (bool): If True, only update hashes of existing local files without downloading new files.
 
     Returns:
         None
@@ -149,9 +153,29 @@ def fetch_subject_data(
         / modality
     )
 
-    subject_folders = sharepoint_utils.get_matching_subfolders(
-        drive_id, site_folder, form_name, headers
-    )
+
+    if len(Path(form_name).parts) > 1:
+        logger.warning(
+            f"Form name '{form_name}' contains subdirectories. "
+            "Subdirectory handling is not currently implemented, so form_name should be a single folder name. "
+            "Proceeding with form_name as provided, but this may lead to issues if subdirectories are expected."
+        )
+
+        matched_form_folders = sharepoint_utils.find_matching_dirs_with_path(
+            drive_id, site_folder, form_name, headers
+        )
+
+        subject_folders = []
+        for form_folder in matched_form_folders:
+            subject_folders.extend(
+                sharepoint_utils.get_child_folders(
+                    drive_id, form_folder, headers, prefix=site_id
+                )
+            )
+    else:
+        subject_folders = sharepoint_utils.get_matching_subfolders(
+            drive_id, site_folder, form_name, headers
+        )
 
     for subject_folder in subject_folders:
         if subject_folder["name"] == subject_id:
@@ -186,6 +210,7 @@ def fetch_subject_data(
                     potential_file_uploads_without_form_update,
                     without_form=without_form,
                     config_file=config_file,
+                    hash_only=hash_only
                 )
 
 
@@ -195,6 +220,7 @@ def pull_all_data(
     site_id: Optional[str] = None,
     subject_id_list: Optional[List[str]] = None,
     source_id: Optional[str] = None,
+    hash_only: bool = False,
 ):
     """
     Main function to pull data for all SharePoint data sources and subjects.
@@ -260,6 +286,19 @@ def pull_all_data(
         extra={"count": len(active_sharepoint_data_sources)},
     )
 
+    if hash_only:
+        msg = "Running in hash-only mode. Will update hashes of existing " \
+              "local files without downloading new files."
+        logger.info(msg)
+        sharepoint_utils.log_event(
+            config_file=config_file,
+            log_level="INFO",
+            event="sharepoint_data_pull_hash_only_mode",
+            message=msg,
+            project_id=project_id,
+            site_id=site_id,
+        )
+
     for sharepoint_data_source in active_sharepoint_data_sources:
         # Get subjects for this data source
         subjects_in_db = Subject.get_subjects_for_project_site(
@@ -319,6 +358,7 @@ def pull_all_data(
                     sharepoint_data_source=sharepoint_data_source,
                     subject_id=subject.subject_id,
                     config_file=config_file,
+                    hash_only=hash_only
                 )
         except RuntimeError as e:
             logger.error(
@@ -368,6 +408,11 @@ if __name__ == "__main__":
         default=None,
         help="Sharepoint source ID to pull data for (optional)",
     )
+    parser.add_argument(
+        "--hash_only",
+        action="store_true",
+        help="Update hash of local files without downloading new files (optional)",
+    )
     args = parser.parse_args()
 
     config_file = utils.get_config_file_path()
@@ -401,6 +446,7 @@ if __name__ == "__main__":
         project_id=args.project_id,
         site_id=args.site_id,
         source_id=args.source_id,
+        hash_only=args.hash_only
     )
 
     logger.info("Finished SharePoint data pull.")
