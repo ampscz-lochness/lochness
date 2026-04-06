@@ -7,7 +7,7 @@ It will pull data for all active SharePoint data sources and their associated su
 """
 
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 file = Path(__file__).resolve()
 parent = file.parent
@@ -151,7 +151,7 @@ def fetch_subject_data(
     )
 
 
-    if len(Path(form_name).parts) > 1:
+    if len([part for part in PurePosixPath(form_name).parts if part not in ("", "/")]) > 1:
         logger.warning(
             f"Form name '{form_name}' contains subdirectories. "
             "Subdirectory handling is not currently implemented, so form_name should be a single folder name. "
