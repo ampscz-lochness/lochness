@@ -25,6 +25,7 @@ class SharepointDataSourceMetadata(BaseModel):
     potential_file_uploads_without_form_update: bool
     subdirs_under_each_subject_dir: Optional[bool]
     without_form: Optional[bool]
+    has_project_folder: bool
 
 
 class SharepointDataSource(BaseModel):
@@ -92,6 +93,7 @@ class SharepointDataSource(BaseModel):
                     potential_file_uploads_without_form_update=row["data_source_metadata"]["potential_file_uploads_without_form_update"],
                     subdirs_under_each_subject_dir=row["data_source_metadata"].get("subdirs_under_each_subject_dir", False),
                     without_form=row["data_source_metadata"].get("without_form", False),
+                    has_project_folder=row["data_source_metadata"]["has_project_folder"],
                 ),
             )
             return sharepoint_data_source
