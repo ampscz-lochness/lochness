@@ -379,9 +379,15 @@ def download_subdirectory(
     filename_list = [x["name"] for x in files]
     removed_file_paths = [
         x for x in output_dir.glob("*") if x.name not in filename_list
+        and not x.is_dir()
     ]
 
+    logger.debug(f"output_dir: {output_dir}")
+    logger.debug(f"filename_list: {filename_list}")
+    logger.debug(removed_file_paths)
+
     for removed_file_path in removed_file_paths:
+        logger.debug(f"File removed from form: {removed_file_path}")
         file_model = File(file_path=removed_file_path)
         file_model.md5 = "DELETED_FROM_TEAMS_FORM"
         db.execute_queries(
@@ -397,12 +403,18 @@ def download_subdirectory(
             continue
 
         file_name = f["name"]
+        parent_path = f["parentReference"]["path"].split(':')[-1]
+
+        if Path(parent_path).name.lower() != output_dir.name.lower():
+            output_dir_subdir = output_dir / Path(parent_path).name
+
+        logger.debug(f"parent_path: {parent_path}")
         file_info = f.get("file", {})
         quick_xor_hash = file_info.get("hashes", {}).get("quickXorHash")
-        local_file_path = output_dir / file_name
-        hash_file_path = output_dir / ("." + file_name + ".quickxorhash")
+        local_file_path = output_dir_subdir / file_name
+        hash_file_path = output_dir_subdir / ("." + file_name + ".quickxorhash")
 
-        file_target_path = output_dir / file_name
+        file_target_path = output_dir_subdir / file_name
 
         if should_download_file(local_file_path, quick_xor_hash):
             download_url = f.get("@microsoft.graph.downloadUrl")

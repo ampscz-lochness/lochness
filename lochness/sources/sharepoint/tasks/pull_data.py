@@ -162,7 +162,6 @@ def fetch_subject_data(
         / subject_id
         / modality
     )
-    print(output_dir)
 
 
     if len([part for part in PurePosixPath(form_name).parts if part not in ("", "/")]) > 1:
@@ -188,7 +187,6 @@ def fetch_subject_data(
             drive_id, site_folder, form_name, headers
         )
 
-    print("="*80)
     for subject_folder in subject_folders:
         logger.debug(f"Checking subject folder: {subject_folder['name']} for subject_id: {subject_id}")
         if subject_folder["name"] == subject_id:
@@ -209,6 +207,7 @@ def fetch_subject_data(
                 continue
                 
             for session_folder in session_folders:
+                logger.debug(f"Processing session folder: {session_folder['name']} for subject_id: {subject_id}")
                 sharepoint_utils.download_new_or_updated_files(
                     session_folder,
                     drive_id,
@@ -225,8 +224,6 @@ def fetch_subject_data(
                     config_file=config_file,
                     hash_only=hash_only
                 )
-    import sys
-    sys.exit('ha')
 
 
 def pull_all_data(
