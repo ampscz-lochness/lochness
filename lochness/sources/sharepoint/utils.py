@@ -403,8 +403,9 @@ def download_subdirectory(
             continue
 
         file_name = f["name"]
-        parent_path = f["parentReference"]["path"].split(':')[-1]
+        parent_path = f["parentReference"]["path"].split(":")[-1]
 
+        output_dir_subdir = output_dir
         if Path(parent_path).name.lower() != output_dir.name.lower():
             output_dir_subdir = output_dir / Path(parent_path).name
 
@@ -715,12 +716,6 @@ def get_child_folders(
     if prefix is not None:
         folders = [f for f in folders if f.get("name", "").startswith(prefix)]
 
-    print(
-        f"[PATH-TRACE] CHILDREN of {parent_folder.get('name')} -> "
-        f"{[f.get('name') for f in folders[:20]]}"
-        + (" ..." if len(folders) > 20 else "")
-    )
-
     return folders
 
 
@@ -731,26 +726,16 @@ def find_matching_dirs_with_path(
         headers: Dict,
         timeout: int = 120) -> List[Dict]:
     target_parts = [p for p in PurePosixPath(target_path).parts if p not in ("", "/")]
-    DEBUG_PREFIX = "[PATH-TRACE]"
-
-    print(f"{DEBUG_PREFIX} START target_path='{target_path}' parts={target_parts}")
 
     if not target_parts:
-        print(f"{DEBUG_PREFIX} EMPTY target_parts -> returning []")
         return []
 
     current_folders = [parent_folder]
-    print(f"{DEBUG_PREFIX} INIT current_folders = {[f.get('name') for f in current_folders]}")
 
     for level, part in enumerate(target_parts):
-        print(f"\n{DEBUG_PREFIX} ===== LEVEL {level} | looking for '{part}' =====")
         next_folders = []
 
         for idx, folder in enumerate(current_folders):
-            folder_name = folder.get("name", "<NO_NAME>")
-            folder_path = folder.get("parentReference", {}).get("path", "")
-            print(f"{DEBUG_PREFIX} [L{level} F{idx}] IN folder: {folder_path}/{folder_name}")
-
             try:
                 matched_folder = find_subfolder(
                     drive_id,
@@ -761,30 +746,12 @@ def find_matching_dirs_with_path(
                 )
 
                 if matched_folder:
-                    print(
-                        f"{DEBUG_PREFIX} [L{level} F{idx}] MATCHED folder -> "
-                        f"{matched_folder.get('name')} | id={matched_folder.get('id')}"
-                    )
                     next_folders.append(matched_folder)
-                else:
-                    print(f"{DEBUG_PREFIX} [L{level} F{idx}] NO MATCH for '{part}'")
 
             except Exception as e:
-                print(f"{DEBUG_PREFIX} [L{level} F{idx}] ERROR: {e}")
+                logger.debug("Error matching SharePoint path segment '%s': %s", part, e)
 
         if not next_folders:
-            print(f"{DEBUG_PREFIX} LEVEL {level} FAILED: no matches for '{part}'")
-            print(f"{DEBUG_PREFIX} RETURN []")
             return []
-
-        print(
-            f"{DEBUG_PREFIX} LEVEL {level} SUCCESS -> "
-            f"{[f.get('name', '<NO_NAME>') for f in next_folders]}"
-        )
         current_folders = next_folders
-
-    print(
-        f"\n{DEBUG_PREFIX} DONE -> final folders: "
-        f"{[f.get('name', '<NO_NAME>') for f in current_folders]}"
-    )
     return current_folders

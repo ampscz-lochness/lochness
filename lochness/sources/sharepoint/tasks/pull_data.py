@@ -125,6 +125,8 @@ def fetch_subject_data(
         project_id[:1].upper() + project_id[1:].lower() if project_id else project_id
     )
 
+    has_project_folder: Optional[bool] = True
+
     if metadata.has_project_folder:
         logger.debug(f"Looking for project folder '{project_name_cap}' in drive '{metadata.drive_name}'...")
         project_folder = sharepoint_utils.find_folder_in_drive(
@@ -153,8 +155,14 @@ def fetch_subject_data(
         )
 
     lochness_root: str = config.parse(config_file, "general")["lochness_root"]  # type: ignore
+    include_project_dir_in_output = project_id.lower() != "pronet"
+
+    output_dir = Path(lochness_root)
+    if include_project_dir_in_output:
+        output_dir = output_dir / project_name_cap
+
     output_dir = (
-        Path(lochness_root)
+        output_dir
         / "PHOENIX"
         / "PROTECTED"
         / f"{project_name_cap}{site_id}"
@@ -171,6 +179,7 @@ def fetch_subject_data(
             "Proceeding with form_name as provided, but this may lead to issues if subdirectories are expected."
         )
 
+        logger.info("Resolving nested SharePoint form path '%s'.", form_name)
         matched_form_folders = sharepoint_utils.find_matching_dirs_with_path(
             drive_id, site_folder, form_name, headers
         )
