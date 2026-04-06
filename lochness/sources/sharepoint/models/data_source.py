@@ -23,6 +23,7 @@ class SharepointDataSourceMetadata(BaseModel):
     drive_name: str
     date_str: str
     potential_file_uploads_without_form_update: bool
+    has_project_folder: bool
 
 
 class SharepointDataSource(BaseModel):
@@ -88,6 +89,7 @@ class SharepointDataSource(BaseModel):
                     drive_name=row["data_source_metadata"]["drive_name"],
                     date_str=row["data_source_metadata"]["date_str"],
                     potential_file_uploads_without_form_update=row["data_source_metadata"]["potential_file_uploads_without_form_update"],
+                    has_project_folder=row["data_source_metadata"]["has_project_folder"],
                 ),
             )
             return sharepoint_data_source
