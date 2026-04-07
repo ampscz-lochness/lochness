@@ -355,7 +355,8 @@ def download_subdirectory(
     data_source_name: str,
     output_dir: Path,
     config_file: Path,
-    hash_only: bool = False
+    hash_only: bool = False,
+    subdirs_under_each_subject_dir: bool = False
 ) -> None:
     """
     Download updated files to the output_dir and clean up previous files
@@ -406,8 +407,9 @@ def download_subdirectory(
         parent_path = f["parentReference"]["path"].split(":")[-1]
 
         output_dir_subdir = output_dir
-        if Path(parent_path).name.lower() != output_dir.name.lower():
-            output_dir_subdir = output_dir / Path(parent_path).name
+        if subdirs_under_each_subject_dir:
+            if Path(parent_path).name.lower() != output_dir.name.lower():
+                output_dir_subdir = output_dir / Path(parent_path).name
 
         logger.debug(f"parent_path: {parent_path}")
         file_info = f.get("file", {})
@@ -628,6 +630,7 @@ def download_new_or_updated_files(
     without_form: bool,
     config_file: Path,
     hash_only: bool = False,
+    subdirs_under_each_subject_dir: bool = False
 ) -> None:
     """
     Download all files under the subfolder from a submitted form
@@ -685,7 +688,8 @@ def download_new_or_updated_files(
             data_source_name,
             output_dir,
             config_file=config_file,
-            hash_only=hash_only
+            hash_only=hash_only,
+            subdirs_under_each_subject_dir=subdirs_under_each_subject_dir
         )
 
 
