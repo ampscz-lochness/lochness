@@ -411,7 +411,6 @@ def download_subdirectory(
             if Path(parent_path).name.lower() != output_dir.name.lower():
                 output_dir_subdir = output_dir / Path(parent_path).name
 
-        logger.debug(f"parent_path: {parent_path}")
         file_info = f.get("file", {})
         quick_xor_hash = file_info.get("hashes", {}).get("quickXorHash")
         local_file_path = output_dir_subdir / file_name
