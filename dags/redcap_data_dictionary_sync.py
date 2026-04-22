@@ -15,6 +15,7 @@ The synchronization process:
 Parameters:
     - project_id: Optional project ID to limit sync scope
     - site_id: Optional site ID to limit sync scope
+    - data_source_name: Optional data source name to limit sync scope
     - dry_run: When True, performs checks without updating the database
 """
 
@@ -74,6 +75,15 @@ with DAG(
                 ),
                 title="Site ID",
             ),
+            "data_source_name": Param(
+                default=None,
+                type=["null", "string"],
+                description=(
+                    "Optional: Limit sync to a specific REDCap data source name. "
+                    "Leave empty to sync all data sources."
+                ),
+                title="Data Source Name",
+            ),
             "dry_run": Param(
                 default=False,
                 type=["null", "boolean"],
@@ -109,6 +119,7 @@ echo "LOCHNESS_REPO_ROOT: {{ var.value['LOCHNESS_REPO_ROOT'] }}"
 echo "LOCHNESS_PYTHON_PATH: {{ var.value['LOCHNESS_PYTHON_PATH'] }}"
 echo "Project ID: {{ params.project_id or 'ALL' }}"
 echo "Site ID: {{ params.site_id or 'ALL' }}"
+echo "Data Source Name: {{ params.data_source_name or 'ALL' }}"
 echo "Dry Run: {{ params.dry_run }}"
 echo "=================================="''',
         cwd="{{ var.value['LOCHNESS_REPO_ROOT'] }}",
@@ -122,7 +133,8 @@ echo "=================================="''',
             "{{ var.value['LOCHNESS_REPO_ROOT'] }}/lochness/sources/redcap/tasks/"
             "pull_dictionary.py "
             "{% if params.project_id %} --project_id {{ params.project_id }}{% endif %} "
-            "{% if params.site_id %} --site_id {{ params.site_id }}{% endif %}"
+            "{% if params.site_id %} --site_id {{ params.site_id }}{% endif %} "
+            "{% if params.data_source_name %} --data_source_name {{ params.data_source_name }}{% endif %}"
         ),
         cwd="{{ var.value['LOCHNESS_REPO_ROOT'] }}",
         outlets=[redcap_data_dictionary_asset],
