@@ -19,11 +19,13 @@ class RedcapDataSourceMetadata(BaseModel):
 
     keystore_name: str
     endpoint_url: str
-    optional_variables_dictionary: List[Dict[str, str]]
+    optional_variables_dictionary: List[Dict[str, str]] = Field(default_factory=list)
     main_redcap: bool = False
     subject_id_variable: Optional[str]
     subject_id_variable_as_the_pk: bool = True
     messy_subject_id: bool = False
+    redact_all_identifiers: bool = False
+    redact_fields_list: List[str] = Field(default_factory=list)
     dictionary: Optional[List[Dict[str, Any]]] = Field(
         repr=False,
         default=None
@@ -78,15 +80,6 @@ class RedcapDataSource(BaseModel):
             Returns:
                 RedcapDataSource: A RedcapDataSource object.
             """
-            # Handle missing optional_variables_dictionary with default empty list
-            optional_variables = (
-                row["data_source_metadata"]
-                .get(
-                    "optional_variables_dictionary",
-                    []
-                )
-            )
-
             redcap_data_source = RedcapDataSource(
                 data_source_name=row["data_source_name"],
                 is_active=row["data_source_is_active"],
@@ -94,20 +87,7 @@ class RedcapDataSource(BaseModel):
                 project_id=row["project_id"],
                 data_source_type=row["data_source_type"],
                 data_source_metadata=RedcapDataSourceMetadata(
-                    keystore_name=row["data_source_metadata"]["keystore_name"],
-                    endpoint_url=row["data_source_metadata"]["endpoint_url"],
-                    subject_id_variable=row["data_source_metadata"][
-                        "subject_id_variable"
-                    ],
-                    messy_subject_id=row["data_source_metadata"][
-                        "messy_subject_id"
-                    ],
-                    subject_id_variable_as_the_pk=row["data_source_metadata"][
-                        "subject_id_variable_as_the_pk"
-                    ],
-                    optional_variables_dictionary=optional_variables,
-                    main_redcap=row["data_source_metadata"]["main_redcap"],
-                    dictionary=row["data_source_metadata"].get("dictionary")
+                    **row["data_source_metadata"]
                 ),
             )
             return redcap_data_source
