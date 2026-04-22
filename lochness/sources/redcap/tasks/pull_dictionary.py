@@ -182,6 +182,7 @@ def fetch_dictionary(
             config_file=config_file,
             project_id=project_id,
             site_id=site_id,
+            data_source_name=data_source_name,
             dictionary=raw_data,
         )
     else:
@@ -205,6 +206,7 @@ def fetch_dictionary(
             config_file=config_file,
             project_id=project_id,
             site_id=site_id,
+            data_source_name=data_source_name,
             dictionary=raw_data,
         )
 
@@ -212,7 +214,7 @@ def fetch_dictionary(
 
 
 def refresh_redcap_dictionary(
-    config_file: Path, project_id: Optional[str] = None, site_id: Optional[str] = None
+    config_file: Path, project_id: Optional[str] = None, site_id: Optional[str] = None, data_source_name: Optional[str] = None
 ) -> None:
     """
     Refreshes the metadata for all active REDCap data sources in the database.
@@ -221,7 +223,7 @@ def refresh_redcap_dictionary(
         config_file (Path): Path to the config file.
         project_id (Optional[str]): If provided, only refresh this project ID.
         site_id (Optional[str]): If provided, only refresh this site ID.
-
+        data_source_name (Optional[str]): If provided, only refresh this data source name.
     Returns:
         None
     """
@@ -252,6 +254,10 @@ def refresh_redcap_dictionary(
     if site_id:
         active_redcap_data_sources = [
             ds for ds in active_redcap_data_sources if ds.site_id == site_id
+        ]
+    if data_source_name:
+        active_redcap_data_sources = [
+            ds for ds in active_redcap_data_sources if ds.data_source_name == data_source_name
         ]
 
     if not active_redcap_data_sources:
@@ -304,6 +310,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--site_id", type=str, default=None, help="Site ID to refresh (optional)"
     )
+    parser.add_argument(
+        "--data_source_name", type=str, default=None, help="Data source name to refresh (optional)"
+    )
     args = parser.parse_args()
 
     config_file = utils.get_config_file_path()
@@ -319,7 +328,7 @@ if __name__ == "__main__":
 
     logger.info("Refreshing REDCap dictionary...")
     refresh_redcap_dictionary(
-        config_file=config_file, project_id=args.project_id, site_id=args.site_id
+        config_file=config_file, project_id=args.project_id, site_id=args.site_id, data_source_name=args.data_source_name
     )
 
     logger.info("Finished refreshing REDCap dictionary.")
@@ -330,4 +339,5 @@ if __name__ == "__main__":
         message="Finished REDCap dictionary refresh process.",
         project_id=args.project_id,
         site_id=args.site_id,
+        data_source_name=args.data_source_name,
     )
