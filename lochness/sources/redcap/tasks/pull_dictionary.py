@@ -241,11 +241,6 @@ def refresh_redcap_dictionary(
         active_only=True,
     )
 
-    # make sure they have subject_id_variable in metadata
-    active_redcap_data_sources = [
-        ds for ds in active_redcap_data_sources if ds.data_source_metadata.main_redcap
-    ]
-
     # Filter by project_id and/or site_id if provided
     if project_id:
         active_redcap_data_sources = [
