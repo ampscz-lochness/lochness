@@ -43,7 +43,7 @@ default_args = {
     "email_on_retry": False,
     "retries": 3,
     "retry_delay": datetime.timedelta(minutes=1),
-    "execution_timeout": datetime.timedelta(minutes=45),
+    "execution_timeout": datetime.timedelta(minutes=90),
 }
 
 with DAG(
