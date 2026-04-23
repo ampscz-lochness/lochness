@@ -105,6 +105,7 @@ class RedcapDataSource(BaseModel):
         config_file: Path,
         project_id: str,
         site_id: str,
+        data_source_name: str,
         dictionary: List[Dict[str, Any]],
     ) -> None:
         """
@@ -130,6 +131,7 @@ class RedcapDataSource(BaseModel):
         )
         WHERE project_id = '{project_id}'
             AND site_id = '{site_id}'
+            AND data_source_name = '{data_source_name}'
             AND data_source_type = 'redcap'
         """
 
