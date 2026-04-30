@@ -282,15 +282,18 @@ if __name__ == "__main__":
         "-d",
         "--days-to-pull",
         type=int,
-        default=14,
-        help="Number of days of data to pull",
+        default=None,
+        help="Number of days of data to pull (default: 14 when days mode is used)",
     )
     parser.add_argument(
         "-r",
         "--days-to-redownload",
         type=int,
-        default=7,
-        help="Number of days of data to redownload",
+        default=None,
+        help=(
+            "Number of days of data to redownload "
+            "(default: 7 when days mode is used)"
+        ),
     )
     parser.add_argument(
         "--start-date",
@@ -322,7 +325,11 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    config_file = utils.get_config_file_path()
+    config_file = (
+        Path(args.config).expanduser().resolve()
+        if args.config
+        else utils.get_config_file_path()
+    )
     logger.info(f"Using config file: {config_file}")
     if not config_file.exists():
         logger.error(f"Config file does not exist: {config_file}")
@@ -335,10 +342,19 @@ if __name__ == "__main__":
     logger.info("Starting MindLAMP data pull script...")
 
     # Validation logic for date/days arguments
+    date_range_partially_provided = (
+        args.start_date is not None or args.end_date is not None
+    )
     date_range_provided = args.start_date is not None and args.end_date is not None
     days_provided = (
-        args.days_to_pull is not None and args.days_to_redownload is not None
+        args.days_to_pull is not None or args.days_to_redownload is not None
     )
+
+    if date_range_partially_provided and not date_range_provided:
+        logger.error(
+            "Both start_date and end_date must be provided when using date-range mode."
+        )
+        sys.exit(1)
 
     if date_range_provided and days_provided:
         logger.error(
@@ -346,22 +362,19 @@ if __name__ == "__main__":
             "(days_to_pull/days_to_redownload) provided. Please provide only one method."
         )
         sys.exit(1)
-    if not date_range_provided and not days_provided:
-        logger.error(
-            "Neither date range nor days-based arguments provided. "
-            "Please specify either a date range or days to pull/redownload."
-        )
-        sys.exit(1)
-
     # Parse date arguments if provided, else use days-based logic
     if date_range_provided:
         start_date = parse_date(args.start_date)
         end_date = parse_date(args.end_date)
         logger.info(f"Using date range: {start_date.date()} to {end_date.date()}")
     else:
+        days_to_pull = args.days_to_pull if args.days_to_pull is not None else 14
+        days_to_redownload = (
+            args.days_to_redownload if args.days_to_redownload is not None else 7
+        )
         end_date = datetime.now(tz=pytz.UTC) - timedelta(days=1)
-        start_date = end_date - timedelta(days=args.days_to_pull - 1)
-        logger.info(f"Days to pull: {args.days_to_pull}")
+        start_date = end_date - timedelta(days=days_to_pull - 1)
+        logger.info(f"Days to pull: {days_to_pull}")
         logger.info(f"Pulling data from {start_date.date()} to {end_date.date()}")
 
     if args.force_start_date and args.force_end_date:
@@ -372,8 +385,11 @@ if __name__ == "__main__":
         )
     else:
         force_end_date = end_date
-        force_start_date = force_end_date - timedelta(days=args.days_to_redownload - 1)
-        logger.info(f"Days to redownload: {args.days_to_redownload}")
+        days_to_redownload = (
+            args.days_to_redownload if args.days_to_redownload is not None else 7
+        )
+        force_start_date = force_end_date - timedelta(days=days_to_redownload - 1)
+        logger.info(f"Days to redownload: {days_to_redownload}")
         logger.info(
             f"Redownloading data from {force_start_date.date()} to {force_end_date.date()}"
         )
