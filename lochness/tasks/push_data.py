@@ -388,7 +388,7 @@ def push_file_to_sink(
 
             # 2. Remove the data sink location from old versions of this file
             # (the previous file at this path is no longer available at this sink)
-            remove_old_query = File.remove_availability_query(
+            remove_old_query = File.remove_location_from_previous_versions_query(
                 file_path=file_obj.file_path,
                 current_md5=file_obj.md5,  # type: ignore
                 location=ds_location,
@@ -473,6 +473,60 @@ def push_file_to_sink(
     #         },
     #     ).insert(config_file)
     #     return False
+
+
+def cleanup_local_file_after_push(file_obj: File, config_file: Path) -> None:
+    """
+    Remove a locally sourced file after all required sink pushes succeed.
+
+    Also removes the current hostname from the file's available_at metadata.
+    """
+    hostname_location = f"hn:{utils.get_hostname()}"
+
+    if file_obj.file_path.exists():
+        try:
+            fs.remove(file_obj.file_path)
+            logger.info(f"Removed local source file {file_obj.file_path}")
+        except OSError as cleanup_error:
+            logger.warning(
+                f"Failed to remove local file {file_obj.file_path}: {cleanup_error}"
+            )
+            Logs(
+                log_level="WARN",
+                log_message={
+                    "event": "data_push_local_file_cleanup_failed",
+                    "message": "Failed to remove local source file after push.",
+                    "file_path": str(file_obj.file_path),
+                    "hostname_location": hostname_location,
+                    "error": str(cleanup_error),
+                },
+            ).insert(config_file)
+            return
+    else:
+        logger.warning(
+            f"Local source file {file_obj.file_path} was already absent during cleanup"
+        )
+
+    update_query = file_obj.remove_location_from_current_file_query(
+        hostname_location
+    )
+    if update_query:
+        db.execute_queries(
+            config_file,
+            [update_query],
+            show_commands=False,
+            silent=True,
+        )
+
+    Logs(
+        log_level="INFO",
+        log_message={
+            "event": "data_push_local_file_removed",
+            "message": "Removed local source file after final sink push.",
+            "file_path": str(file_obj.file_path),
+            "hostname_location": hostname_location,
+        },
+    ).insert(config_file)
 
 
 def simple_push_file_to_sink(file_path: Path):
@@ -787,7 +841,7 @@ def push_all_data(
                                     "lochness_root"]  # type: ignore
                     relative_path = str(file_obj.file_path.relative_to(
                         lochness_root))
-                push_file_to_sink(
+                push_succeeded = push_file_to_sink(
                     file_obj=file_obj,
                     data_sink=active_data_sink,
                     data_source_name=associated_data_source_name,
@@ -799,6 +853,20 @@ def push_all_data(
                     source_file_path=source_file_path,
                     relative_path=relative_path,
                 )
+
+                if (
+                    push_succeeded
+                    and source_result.source_type == "local"
+                    and not file_obj.has_pending_pushes(
+                        config_file=config_file,
+                        project_id=active_data_sink.project_id,
+                        site_id=active_data_sink.site_id,
+                    )
+                ):
+                    cleanup_local_file_after_push(
+                        file_obj=file_obj,
+                        config_file=config_file,
+                    )
             finally:
                 # Clean up temporary file if we pulled from remote
                 if temp_file_path and temp_file_path.exists():
