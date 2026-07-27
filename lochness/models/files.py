@@ -368,6 +368,83 @@ class File:
         return files
 
     @staticmethod
+    def get_files_with_available_location(
+        config_file: Path,
+        location: str,
+    ) -> List["File"]:
+        """
+        Return file records whose available_at metadata includes the given location.
+
+        Args:
+            config_file (Path): Path to the database configuration file.
+            location (str): Location identifier such as 'hn:hostname' or 'ds:123'.
+
+        Returns:
+            List[File]: Matching file records.
+        """
+        location_sanitized = db.sanitize_string(location)
+
+        query = f"""
+        SELECT *
+        FROM files
+        WHERE file_metadata->'available_at' @> '["{location_sanitized}"]'::jsonb
+        ORDER BY file_m_time DESC;
+        """
+
+        db_df = db.execute_sql(
+            config_file=config_file,
+            query=query,
+        )
+
+        if db_df.empty:
+            return []
+
+        files: List[File] = []
+        for _, row in db_df.iterrows():
+            file_obj = object.__new__(File)
+            file_obj.file_path = Path(row["file_path"])
+            file_obj.file_name = row["file_name"]
+            file_obj.file_type = row["file_type"]
+            file_obj.file_size_mb = row["file_size_mb"]
+            file_obj.m_time = row["file_m_time"]
+            file_obj.md5 = row["file_md5"]
+            file_obj.file_metadata = (
+                row["file_metadata"] if row["file_metadata"] else {}
+            )
+            file_obj.internal_metadata = {}
+
+            files.append(file_obj)
+
+        return files
+
+    def has_any_pushes(self, config_file: Path) -> bool:
+        """
+        Check whether this file version has at least one recorded push.
+
+        Args:
+            config_file (Path): Path to the database configuration file.
+
+        Returns:
+            bool: True if at least one data_push record exists for this file version.
+        """
+        if self.md5 is None:
+            return False
+
+        f_path = db.sanitize_string(str(self.file_path))
+        file_md5 = db.sanitize_string(self.md5)
+
+        query = f"""
+        SELECT 1
+        FROM data_push
+        WHERE file_path = '{f_path}'
+            AND file_md5 = '{file_md5}'
+        LIMIT 1;
+        """
+
+        result_df = db.execute_sql(config_file, query)
+        return not result_df.empty
+
+    @staticmethod
     def remove_location_from_previous_versions_query(
         file_path: Path,
         current_md5: str,
