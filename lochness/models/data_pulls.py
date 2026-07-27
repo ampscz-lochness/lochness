@@ -2,11 +2,11 @@
 DataPull Model
 """
 
-from typing import Dict, Any, Optional
 from pathlib import Path
+from typing import Any, Dict, Optional
 
-from pydantic import BaseModel
 import pandas as pd
+from pydantic import BaseModel
 
 from lochness.helpers import db, utils
 from lochness.models.data_source import DataSource

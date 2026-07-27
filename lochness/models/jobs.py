@@ -1,10 +1,12 @@
 """
 Job Model for unified job queue (pull, push, etc.)
 """
-from typing import Dict, Any, Optional
-from pydantic import BaseModel
-from datetime import datetime
 import json
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+from pydantic import BaseModel
+
 
 class Job(BaseModel):
     job_id: Optional[int] = None

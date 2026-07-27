@@ -5,7 +5,8 @@ This model defines the supported data source types for Lochness,
 and defined their metadata dictionaries.
 """
 
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
 from pydantic import BaseModel
 
 from lochness.helpers import db

@@ -1,11 +1,10 @@
-#!/usr/bin/env python
 """
 File Model
 """
 
-from pathlib import Path
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from lochness.helpers import db, utils
 from lochness.helpers import hash as hash_helper

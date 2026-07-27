@@ -3,10 +3,11 @@ Helper functions for the pipeline
 """
 
 import os
-from pathlib import Path
-from datetime import datetime
 import socket
+from datetime import datetime
+from pathlib import Path
 
+import pandas as pd
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -17,7 +18,6 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
-import pandas as pd
 
 from lochness.helpers import cli
 

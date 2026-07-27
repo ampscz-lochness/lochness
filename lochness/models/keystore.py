@@ -3,10 +3,11 @@ KeyStore class for managing API keys and secrets.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel
 
-from lochness.helpers import db, config
+from lochness.helpers import config, db
 
 
 class KeyStore(BaseModel):
@@ -138,9 +139,9 @@ class KeyStore(BaseModel):
         )
 
         if result_df is not None and not result_df.empty:
-            key_value_raw = result_df["key_value"].values[0]
-            key_type_raw = result_df["key_type"].values[0]
-            key_metadata_raw = result_df["key_metadata"].values[0]
+            key_value_raw: str = result_df["key_value"].values[0]  # type: ignore
+            key_type_raw: str = result_df["key_type"].values[0]  # type: ignore
+            key_metadata_raw: Dict[str, Any] = result_df["key_metadata"].values[0]  # type: ignore
 
             return KeyStore(
                 key_name=key_name,

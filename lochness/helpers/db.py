@@ -6,13 +6,13 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Callable, Dict, Optional, Any, List, Tuple, no_type_check
+from typing import Any, Callable, Dict, List, Optional, Tuple, no_type_check
 
 import pandas as pd
 import psycopg2
 import sqlalchemy
 
-from lochness.helpers import utils, config
+from lochness.helpers import config, utils
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +224,7 @@ def get_db_connection(
         + credentials["database"]
     )
 
-    return engine
+    return engine  # type: ignore
 
 
 def execute_sql(

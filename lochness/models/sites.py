@@ -2,7 +2,8 @@
 Site Model
 """
 
-from typing import Dict, Any
+from typing import Any, Dict
+
 from pydantic import BaseModel
 
 from lochness.helpers import db

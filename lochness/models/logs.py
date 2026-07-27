@@ -2,9 +2,9 @@
 Logs Model
 """
 
-from pathlib import Path
-from typing import Dict, List, Any, Literal, Optional
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel
 

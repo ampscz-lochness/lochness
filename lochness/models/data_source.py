@@ -2,9 +2,9 @@
 Data Source Model
 """
 
-from typing import Dict, Any
-from pathlib import Path
 import logging
+from pathlib import Path
+from typing import Any, Dict
 
 from pydantic import BaseModel
 

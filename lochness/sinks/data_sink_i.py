@@ -7,12 +7,11 @@ pushing data.
 """
 
 import abc
+from pathlib import Path
 from typing import Dict, Optional
 
-from pathlib import Path
-
-from lochness.models.data_sinks import DataSink
 from lochness.models.data_push import DataPush
+from lochness.models.data_sinks import DataSink
 
 
 class DataSinkI(abc.ABC):

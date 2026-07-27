@@ -1,11 +1,11 @@
 """
 Insets and retrieves MinIO credentials in the KeyStore.
 """
-import logging
 import json
+import logging
 from typing import Dict
 
-from lochness.helpers import utils, db, config
+from lochness.helpers import config, db, utils
 from lochness.models.keystore import KeyStore
 
 logger = logging.getLogger(__name__)

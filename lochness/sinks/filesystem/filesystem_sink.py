@@ -6,16 +6,16 @@ import json
 import logging
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 
+from lochness.helpers import hash as hash_helper
 from lochness.helpers.timer import Timer
 from lochness.models.data_push import DataPush
 from lochness.models.keystore import KeyStore
-from lochness.sinks.data_sink_i import DataSinkI
 from lochness.models.logs import Logs
-from lochness.helpers import hash as hash_helper
+from lochness.sinks.data_sink_i import DataSinkI
 
 logger = logging.getLogger(__name__)
 

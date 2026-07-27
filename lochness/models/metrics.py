@@ -2,7 +2,8 @@
 Metrics for monitoring the load and performance of the Lochness systems.
 """
 
-from typing import Dict, Any
+from typing import Any, Dict
+
 from pydantic import BaseModel
 
 from lochness.helpers import db

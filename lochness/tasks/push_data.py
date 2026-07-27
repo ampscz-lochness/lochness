@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from rich.logging import RichHandler
 
-from lochness.helpers import db, fs, logs, utils, config
+from lochness.helpers import config, db, fs, logs, utils
 from lochness.models.data_pulls import DataPull
 from lochness.models.data_push import DataPush
 from lochness.models.data_sinks import DataSink
