@@ -327,6 +327,7 @@ class File:
                 AND dp.project_id = '{project_id}'
                 AND dp.site_id = '{site_id}'
             )
+            WHERE f.file_md5 <> 'DELETED_FROM_TEAMS_FORM'
         )
         SELECT files.*
         FROM latest_files files

@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 import requests
 
@@ -338,6 +338,45 @@ def extract_info(
     return subject_id, form_title, dt_str, timestamp
 
 
+def mark_removed_files(
+    expected_filenames: List[str],
+    output_dir: Path,
+    config_file: Path,
+) -> None:
+    """
+    Mark local files as deleted when they are missing from expected filenames.
+
+    Args:
+        expected_filenames (List[str]): Filenames expected to exist locally.
+        output_dir (Path): Directory to inspect for local files.
+        config_file (Path): Path to the configuration file for DB operations.
+
+    Returns:
+        None
+    """
+    expected_filename_set: Set[str] = {
+        file_name for file_name in expected_filenames if file_name
+    }
+
+    # Label previously downloaded files that are now removed from the form
+    removed_file_paths = [
+        x
+        for x in output_dir.glob("*")
+        if x.is_file()
+        and not x.name.endswith(".quickxorhash")
+        and x.name not in expected_filename_set
+    ]
+
+    for removed_file_path in removed_file_paths:
+        file_model = File(file_path=removed_file_path)
+        file_model.md5 = "DELETED_FROM_TEAMS_FORM"
+        db.execute_queries(
+            config_file,
+            file_model.to_sql_queries_with_availability_update(),
+            show_commands=False,
+        )
+
+
 def download_subdirectory(
     files: List[Dict],
     subject_id: str,
@@ -346,6 +385,7 @@ def download_subdirectory(
     data_source_name: str,
     output_dir: Path,
     config_file: Path,
+    manage_deletions: bool = True,
 ) -> None:
     """
     Download updated files to the output_dir and clean up previous files
@@ -358,25 +398,23 @@ def download_subdirectory(
         data_source_name (str): The data source name for logging purposes.
         output_dir (Path): The directory to save downloaded files.
         config_file (Path): Path to the configuration file for database operations.
+        manage_deletions (bool): If True, mark local files that are not present
+            in this file listing as deleted. This should be disabled when files
+            are pulled from multiple remote folders into a shared output
+            directory and deletions are reconciled once from an aggregated
+            filename set.
     Returns:
         None
     Raises:
         RuntimeError: If a file download fails.
     """
 
-    # Label previously downloaded files that are now removed from the form
-    filename_list = [x["name"] for x in files]
-    removed_file_paths = [
-        x for x in output_dir.glob("*") if x.name not in filename_list
-    ]
-
-    for removed_file_path in removed_file_paths:
-        file_model = File(file_path=removed_file_path)
-        file_model.md5 = "DELETED_FROM_TEAMS_FORM"
-        db.execute_queries(
-            config_file,
-            file_model.to_sql_queries_with_availability_update(),
-            show_commands=False,
+    if manage_deletions:
+        expected_filenames = [x["name"] for x in files if "name" in x]
+        mark_removed_files(
+            expected_filenames=expected_filenames,
+            output_dir=output_dir,
+            config_file=config_file,
         )
 
     # Download all other files
@@ -585,7 +623,8 @@ def download_new_or_updated_files(
     potential_file_uploads_without_form_update: bool,
     without_form: bool,
     config_file: Path,
-) -> None:
+    manage_deletions: bool = True,
+) -> List[str]:
     """
     Download all files under the subfolder from a submitted form
 
@@ -600,10 +639,12 @@ def download_new_or_updated_files(
         data_source_name (str): The data source name for logging purposes.
         output_dir_root (Path): The root directory to save downloaded files.
         config_file (Path): Path to the configuration file for database operations.
+        manage_deletions (bool): If True, reconcile deletions for this folder.
+            Disable when running aggregated deletion reconciliation across
+            multiple remote folders.
 
     Returns:
-        None
-        None
+        List[str]: Names returned by this folder listing.
     Raises:
         RuntimeError: If a file download fails.
     """
@@ -612,6 +653,8 @@ def download_new_or_updated_files(
     logger.info("Found subfolder: %s", subfolder_name)
 
     files = sharepoint_api.list_folder_items(drive_id, subfolder_id, headers)
+    expected_filenames = [f["name"] for f in files if "name" in f]
+
     if without_form:
         output_dir = output_dir_root
     else:
@@ -623,7 +666,7 @@ def download_new_or_updated_files(
             logger.debug(
                 "No response.submitted.json found in %s, skipping.", subfolder_name
             )
-            return
+            return expected_filenames
 
         output_dir = is_response_json_updated(
             response_json_file, subfolder_name, subject_id,
@@ -641,4 +684,7 @@ def download_new_or_updated_files(
             data_source_name,
             output_dir,
             config_file=config_file,
+            manage_deletions=manage_deletions,
         )
+
+    return expected_filenames
