@@ -247,18 +247,82 @@ def find_drive_by_name(drives: List[Dict], name: str) -> Optional[Dict]:
     return drive
 
 
-def should_download_file(local_file_path: Path, quick_xor_hash: Optional[str]) -> bool:
+def is_pulled_and_pushed(
+    local_file_path: Path,
+    quick_xor_hash: Optional[str],
+    config_file: Path,
+    project_id: str,
+    site_id: str,
+) -> bool:
+    """
+    Checks the database for whether this exact remote file version was already
+    pulled and has since been pushed to every active sink.
+
+    Files in this state are removed locally by the post-push cleanup sweep
+    (see `lochness.tasks.push_data.cleanup_completed_local_files`), so their
+    absence on disk must not trigger a re-download.
+
+    Args:
+        local_file_path (Path): The path the file is (or was) saved to locally.
+        quick_xor_hash (Optional[str]): The QuickXorHash from the remote file metadata.
+        config_file (Path): Path to the configuration file for DB operations.
+        project_id (str): Project ID for the sink scope.
+        site_id (str): Site ID for the sink scope.
+
+    Returns:
+        bool: True if the remote version was already pulled and fully pushed.
+    """
+    if not quick_xor_hash:
+        return False
+
+    data_pull = DataPull.get_most_recent_data_pull_for_file_path(
+        config_file=config_file, file_path=str(local_file_path)
+    )
+    if data_pull is None:
+        return False
+
+    if data_pull.pull_metadata.get("quickxorhash") != quick_xor_hash:
+        return False
+
+    if not File.version_has_any_pushes(
+        config_file=config_file,
+        file_path=local_file_path,
+        file_md5=data_pull.file_md5,
+    ):
+        return False
+
+    return not File.version_has_pending_pushes(
+        config_file=config_file,
+        file_path=local_file_path,
+        file_md5=data_pull.file_md5,
+        project_id=project_id,
+        site_id=site_id,
+    )
+
+
+def should_download_file(
+    local_file_path: Path,
+    quick_xor_hash: Optional[str],
+    config_file: Optional[Path] = None,
+    project_id: Optional[str] = None,
+    site_id: Optional[str] = None,
+) -> bool:
     """
     Determines whether a file should be downloaded based on its local presence and hash.
 
-    TODO: Currently checks for a local .quickxorhash file. In the future, consider storing
-    the hash in a database or metadata file for better integrity checks.
+    If the file is present locally, its hidden .quickxorhash file is compared with the
+    remote hash. If the file is absent locally, the database is checked for whether the
+    same remote version was already pulled and pushed (and then cleaned up locally).
 
     Returns True if the file should be downloaded, False otherwise.
 
     Args:
         local_file_path (Path): The path to the local file.
         quick_xor_hash (Optional[str]): The QuickXorHash from the remote file metadata.
+        config_file (Optional[Path]): Path to the configuration file for DB operations.
+            The database check is skipped when not provided.
+        project_id (Optional[str]): Project ID for the sink scope.
+        site_id (Optional[str]): Site ID for the sink scope.
 
     Returns:
         bool: True if the file should be downloaded, False otherwise.
@@ -286,9 +350,23 @@ def should_download_file(local_file_path: Path, quick_xor_hash: Optional[str]) -
         logger.info(
             f"Local file exists but no hash file for {local_file_path}. Re-downloading."
         )
-    else:
-        logger.info(f"Local file does not exist. Downloading {local_file_path}.")
+        return True
 
+    if (
+        config_file is not None
+        and project_id is not None
+        and site_id is not None
+        and is_pulled_and_pushed(
+            local_file_path, quick_xor_hash, config_file, project_id, site_id
+        )
+    ):
+        logger.info(
+            f"{local_file_path} was already pulled and pushed, and removed locally "
+            "after push. Skipping download."
+        )
+        return False
+
+    logger.info(f"Local file does not exist. Downloading {local_file_path}.")
     return True
 
 
@@ -431,7 +509,13 @@ def download_subdirectory(
 
         file_target_path = output_dir / file_name
 
-        if should_download_file(local_file_path, quick_xor_hash):
+        if should_download_file(
+            local_file_path,
+            quick_xor_hash,
+            config_file=config_file,
+            project_id=project_id,
+            site_id=site_id,
+        ):
             download_url = f.get("@microsoft.graph.downloadUrl")
             if download_url:
                 start_time = datetime.now()

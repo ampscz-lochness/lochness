@@ -431,8 +431,32 @@ class File:
         if self.md5 is None:
             return False
 
-        f_path = db.sanitize_string(str(self.file_path))
-        file_md5 = db.sanitize_string(self.md5)
+        return File.version_has_any_pushes(
+            config_file=config_file,
+            file_path=self.file_path,
+            file_md5=self.md5,
+        )
+
+    @staticmethod
+    def version_has_any_pushes(
+        config_file: Path, file_path: Path, file_md5: str
+    ) -> bool:
+        """
+        Check whether a file version has at least one recorded push.
+
+        Unlike `has_any_pushes`, this does not require the file to exist
+        locally, so it can be used for files cleaned up after a push.
+
+        Args:
+            config_file (Path): Path to the database configuration file.
+            file_path (Path): Path to the file.
+            file_md5 (str): MD5 hash of the file version.
+
+        Returns:
+            bool: True if at least one data_push record exists for this file version.
+        """
+        f_path = db.sanitize_string(str(file_path))
+        file_md5 = db.sanitize_string(file_md5)
 
         query = f"""
         SELECT 1
@@ -596,8 +620,41 @@ class File:
         if self.md5 is None:
             return False
 
-        f_path = db.sanitize_string(str(self.file_path))
-        file_md5 = db.sanitize_string(self.md5)
+        return File.version_has_pending_pushes(
+            config_file=config_file,
+            file_path=self.file_path,
+            file_md5=self.md5,
+            project_id=project_id,
+            site_id=site_id,
+        )
+
+    @staticmethod
+    def version_has_pending_pushes(
+        config_file: Path,
+        file_path: Path,
+        file_md5: str,
+        project_id: str,
+        site_id: str,
+    ) -> bool:
+        """
+        Check whether a file version still needs to be pushed to any active sink.
+
+        Unlike `has_pending_pushes`, this does not require the file to exist
+        locally, so it can be used for files cleaned up after a push.
+
+        Args:
+            config_file (Path): Path to the database configuration file.
+            file_path (Path): Path to the file.
+            file_md5 (str): MD5 hash of the file version.
+            project_id (str): Project ID for the sink scope.
+            site_id (str): Site ID for the sink scope.
+
+        Returns:
+            bool: True if at least one active data sink for the project/site does
+                not yet have a matching data_push record for this file version.
+        """
+        f_path = db.sanitize_string(str(file_path))
+        file_md5 = db.sanitize_string(file_md5)
         sanitized_project_id = db.sanitize_string(project_id)
         sanitized_site_id = db.sanitize_string(site_id)
 

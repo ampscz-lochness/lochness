@@ -179,6 +179,48 @@ class DataPull(BaseModel):
             pull_metadata=row["pull_metadata"],
         )
 
+    @staticmethod
+    def get_most_recent_data_pull_for_file_path(
+        config_file: Path, file_path: str
+    ) -> Optional["DataPull"]:
+        """
+        Returns the most recent data_pull record for the given file_path,
+        regardless of file version (md5).
+
+        Args:
+            config_file (Path): Path to the database configuration file.
+            file_path (str): Path to the file.
+
+        Returns:
+            Optional[DataPull]: The most recent data_pull record, or None if
+                the file has never been pulled.
+        """
+        f_path = db.sanitize_string(file_path)
+        sql_query = f"""
+            SELECT * FROM data_pull
+            WHERE file_path = '{f_path}'
+            ORDER BY pull_timestamp DESC, data_pull_id DESC
+            LIMIT 1;
+        """
+
+        result_df = db.execute_sql(config_file, sql_query)
+
+        if result_df.empty:
+            return None
+
+        row = result_df.iloc[0]
+
+        return DataPull(
+            subject_id=row["subject_id"],
+            data_source_name=row["data_source_name"],
+            site_id=row["site_id"],
+            project_id=row["project_id"],
+            file_path=row["file_path"],
+            file_md5=row["file_md5"],
+            pull_time_s=row["pull_time_s"],
+            pull_metadata=row["pull_metadata"],
+        )
+
     def delete_record_query(self) -> str:
         """Generate a query to delete a record from the table"""
         query = f"""DELETE FROM data_pull
