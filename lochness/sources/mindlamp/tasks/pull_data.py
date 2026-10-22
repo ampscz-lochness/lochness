@@ -25,7 +25,7 @@ except ValueError:
 import argparse
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pytz
 from rich.logging import RichHandler
@@ -108,9 +108,12 @@ def pull_all_data(
     force_end_date: Optional[datetime],
     project_id: Optional[str] = None,
     site_id: Optional[str] = None,
+    subject_ids: Optional[List[str]] = None,
 ):
     """
     Main function to pull data for all active MindLAMP data sources and subjects.
+
+    If subject_ids is provided, only those subjects are pulled.
     """
     log_event(
         config_file=config_file,
@@ -175,6 +178,13 @@ def pull_all_data(
             site_id=mindlamp_data_source.site_id,
             config_file=config_file,
         )
+
+        if subject_ids:
+            subjects_in_db = [
+                subject
+                for subject in subjects_in_db
+                if subject.subject_id in subject_ids
+            ]
 
         if not subjects_in_db:
             logger.info(
@@ -279,6 +289,14 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--project-id", type=str, help="Project ID to filter by")
     parser.add_argument("-s", "--site-id", type=str, help="Site ID to filter by")
     parser.add_argument(
+        "-sid",
+        "--subject-id",
+        type=str,
+        nargs="+",
+        default=None,
+        help="One or more subject IDs to filter by (space or comma separated)",
+    )
+    parser.add_argument(
         "-d",
         "--days-to-pull",
         type=int,
@@ -341,6 +359,16 @@ if __name__ == "__main__":
 
     logger.info("Starting MindLAMP data pull script...")
 
+    subject_ids: Optional[List[str]] = None
+    if args.subject_id:
+        subject_ids = [
+            sid.strip()
+            for value in args.subject_id
+            for sid in value.split(",")
+            if sid.strip()
+        ]
+        logger.info(f"Filtering to subjects: {', '.join(subject_ids)}")
+
     # Validation logic for date/days arguments
     date_range_partially_provided = (
         args.start_date is not None or args.end_date is not None
@@ -398,6 +426,7 @@ if __name__ == "__main__":
         config_file=config_file,
         project_id=args.project_id,
         site_id=args.site_id,
+        subject_ids=subject_ids,
         start_date=start_date,
         end_date=end_date,
         force_start_date=force_start_date,
