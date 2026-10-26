@@ -151,7 +151,11 @@ def find_missing_data_dates(
     end_date: Optional[datetime] = None,
 ) -> Set[datetime]:
     """
-    Returns a set of dates for which there is no data pull for the given subject.
+    Returns a set of dates for which there is no sensor data pull for the given subject.
+
+    Only sensor pulls mark a date as pulled. Activity data is often legitimately
+    absent, so a date with only activity (or audio) pulls means the sensor fetch
+    failed or returned nothing, and the date should be retried.
 
     Args:
         subject_id (str): The subject ID.
@@ -161,7 +165,7 @@ def find_missing_data_dates(
         end_date (Optional[datetime]): The end date. Defaults to None, which sets it to yesterday.
 
     Returns:
-        Set[datetime]: A set of dates without data pulls.
+        Set[datetime]: A set of dates without sensor data pulls.
     """
 
     if end_date is None:
@@ -175,6 +179,13 @@ def find_missing_data_dates(
         config_file=config_file,
         data_source_name=mindlamp_ds.data_source_name,
     )
+
+    if "mindlamp_data_type" in data_pulls_df.columns:
+        data_pulls_df = data_pulls_df[
+            data_pulls_df["mindlamp_data_type"] == "sensor"
+        ].copy()
+    else:
+        data_pulls_df = data_pulls_df.iloc[0:0]
 
     all_dates = pd.date_range(start=start_date, end=end_date, freq="D", tz=pytz.UTC)
     if len(data_pulls_df) == 0:
