@@ -390,8 +390,9 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help=(
-            "Number of days of data to redownload "
-            "(default: 7 when days mode is used)"
+            "Number of days, ending at the end date, to redownload even if already "
+            "pulled. Ignored if --force-start-date/--force-end-date are given. "
+            "Use 0 to disable (default: 7)"
         ),
     )
     parser.add_argument(
@@ -459,22 +460,28 @@ if __name__ == "__main__":
         args.start_date is not None or args.end_date is not None
     )
     date_range_provided = args.start_date is not None and args.end_date is not None
-    days_provided = (
-        args.days_to_pull is not None or args.days_to_redownload is not None
-    )
-
     if date_range_partially_provided and not date_range_provided:
         logger.error(
             "Both start_date and end_date must be provided when using date-range mode."
         )
         sys.exit(1)
 
-    if date_range_provided and days_provided:
+    if date_range_provided and args.days_to_pull is not None:
         logger.error(
-            "Both date range (start_date/end_date) and days-based arguments "
-            "(days_to_pull/days_to_redownload) provided. Please provide only one method."
+            "Both date range (start_date/end_date) and days_to_pull provided. "
+            "Please provide only one method."
         )
         sys.exit(1)
+
+    if args.days_to_redownload is not None and args.days_to_redownload < 0:
+        logger.error(
+            f"--days-to-redownload must be at least 0, got {args.days_to_redownload}."
+        )
+        sys.exit(1)
+
+    days_to_redownload = (
+        args.days_to_redownload if args.days_to_redownload is not None else 7
+    )
     # Parse date arguments if provided, else use days-based logic
     if date_range_provided:
         start_date = parse_date(args.start_date)
@@ -482,30 +489,28 @@ if __name__ == "__main__":
         logger.info(f"Using date range: {start_date.date()} to {end_date.date()}")
     else:
         days_to_pull = args.days_to_pull if args.days_to_pull is not None else 14
-        days_to_redownload = (
-            args.days_to_redownload if args.days_to_redownload is not None else 7
-        )
         end_date = datetime.now(tz=pytz.UTC) - timedelta(days=1)
         start_date = end_date - timedelta(days=days_to_pull - 1)
         logger.info(f"Days to pull: {days_to_pull}")
         logger.info(f"Pulling data from {start_date.date()} to {end_date.date()}")
 
+    force_start_date: Optional[datetime] = None
+    force_end_date: Optional[datetime] = None
     if args.force_start_date and args.force_end_date:
         force_start_date = parse_date(args.force_start_date)
         force_end_date = parse_date(args.force_end_date)
         logger.info(
             f"Redownloading data from {force_start_date.date()} to {force_end_date.date()}"
         )
-    else:
+    elif days_to_redownload > 0:
         force_end_date = end_date
-        days_to_redownload = (
-            args.days_to_redownload if args.days_to_redownload is not None else 7
-        )
         force_start_date = force_end_date - timedelta(days=days_to_redownload - 1)
         logger.info(f"Days to redownload: {days_to_redownload}")
         logger.info(
             f"Redownloading data from {force_start_date.date()} to {force_end_date.date()}"
         )
+    else:
+        logger.info("Skipping forced redownload (days to redownload is 0).")
 
     pull_all_data(
         config_file=config_file,
