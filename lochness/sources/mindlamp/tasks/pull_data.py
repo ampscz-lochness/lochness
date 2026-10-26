@@ -24,8 +24,10 @@ except ValueError:
 
 import argparse
 import logging
+from collections import Counter, defaultdict
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
 from rich.logging import RichHandler
@@ -109,11 +111,13 @@ def pull_all_data(
     project_id: Optional[str] = None,
     site_id: Optional[str] = None,
     subject_ids: Optional[List[str]] = None,
+    jobs: int = 1,
 ):
     """
     Main function to pull data for all active MindLAMP data sources and subjects.
 
     If subject_ids is provided, only those subjects are pulled.
+    Up to `jobs` subject-dates are downloaded in parallel.
     """
     log_event(
         config_file=config_file,
@@ -225,8 +229,12 @@ def pull_all_data(
             extra={"count": len(subjects_in_db)},
         )
 
+        # Plan the (subject, date) downloads, then run them across `jobs` workers.
+        # Data sources are processed one at a time, since LAMP.connect() sets
+        # module-level clients and data sources may use different credentials.
+        download_tasks: List[Tuple[str, str, Path, datetime]] = []
         for subject in subjects_in_db:
-            data_pulls = mindlamp_utils.pull_subject_data(
+            download_plan = mindlamp_utils.get_subject_dates_to_download(
                 mindlamp_data_source=mindlamp_data_source,
                 subject_id=subject.subject_id,
                 start_date=start_date,
@@ -235,27 +243,93 @@ def pull_all_data(
                 force_end_date=force_end_date,
                 config_file=config_file,
             )
+            if download_plan is None:
+                continue
 
-            if data_pulls:
-                logger.info(
-                    f"Fetched {len(data_pulls)} data pulls for subject {subject.subject_id} "
-                    f"in project {mindlamp_data_source.project_id} and site "
-                    f"{mindlamp_data_source.site_id}."
+            mindlamp_id, subject_mindlamp_data_root, dates_to_download = download_plan
+            for date_dt in dates_to_download:
+                download_tasks.append(
+                    (subject.subject_id, mindlamp_id, subject_mindlamp_data_root, date_dt)
                 )
-                log_event(
+
+        logger.info(
+            f"Downloading {len(download_tasks)} subject-dates for "
+            f"{mindlamp_data_source.data_source_name} using {jobs} parallel job(s)."
+        )
+
+        remaining_dates_per_subject: Dict[str, int] = Counter(
+            task[0] for task in download_tasks
+        )
+        pulls_per_subject: Dict[str, int] = defaultdict(int)
+
+        with ThreadPoolExecutor(max_workers=jobs) as executor:
+            futures: Dict[Future[List[Any]], Tuple[str, datetime]] = {
+                executor.submit(
+                    mindlamp_utils.fetch_subject_data_for_date,
+                    mindlamp_data_source=mindlamp_data_source,
+                    subject_id=subject_id,
+                    mindlamp_id=mindlamp_id,
+                    datetime_dt=date_dt,
                     config_file=config_file,
-                    log_level="INFO",
-                    event="mindlamp_data_pull_subject_complete",
-                    message=(
-                        f"Fetched {len(data_pulls)} data pulls for subject "
-                        f"{subject.subject_id} in project {mindlamp_data_source.project_id} "
-                        f"and site {mindlamp_data_source.site_id}."
-                    ),
-                    project_id=mindlamp_data_source.project_id,
-                    site_id=mindlamp_data_source.site_id,
-                    data_source_name=mindlamp_data_source.data_source_name,
-                    subject_id=subject.subject_id,
-                )
+                    subject_mindlamp_data_root=subject_mindlamp_data_root,
+                ): (subject_id, date_dt)
+                for (
+                    subject_id,
+                    mindlamp_id,
+                    subject_mindlamp_data_root,
+                    date_dt,
+                ) in download_tasks
+            }
+
+            for future in as_completed(futures):
+                subject_id, date_dt = futures[future]
+                try:
+                    pulls_per_subject[subject_id] += len(future.result())
+                except Exception as e:  # pylint: disable=broad-except
+                    logger.error(
+                        f"Failed to fetch data for subject {subject_id} on "
+                        f"{date_dt.date()}: {e}"
+                    )
+                    log_event(
+                        config_file=config_file,
+                        log_level="ERROR",
+                        event="mindlamp_data_pull_date_failed",
+                        message=(
+                            f"Failed to fetch data for subject {subject_id} on "
+                            f"{date_dt.date()}: {e}"
+                        ),
+                        project_id=mindlamp_data_source.project_id,
+                        site_id=mindlamp_data_source.site_id,
+                        data_source_name=mindlamp_data_source.data_source_name,
+                        subject_id=subject_id,
+                        extra={"data_date_utc": str(date_dt.date())},
+                    )
+
+                remaining_dates_per_subject[subject_id] -= 1
+                if remaining_dates_per_subject[subject_id] > 0:
+                    continue
+
+                num_pulls = pulls_per_subject[subject_id]
+                if num_pulls:
+                    logger.info(
+                        f"Fetched {num_pulls} data pulls for subject {subject_id} "
+                        f"in project {mindlamp_data_source.project_id} and site "
+                        f"{mindlamp_data_source.site_id}."
+                    )
+                    log_event(
+                        config_file=config_file,
+                        log_level="INFO",
+                        event="mindlamp_data_pull_subject_complete",
+                        message=(
+                            f"Fetched {num_pulls} data pulls for subject "
+                            f"{subject_id} in project {mindlamp_data_source.project_id} "
+                            f"and site {mindlamp_data_source.site_id}."
+                        ),
+                        project_id=mindlamp_data_source.project_id,
+                        site_id=mindlamp_data_source.site_id,
+                        data_source_name=mindlamp_data_source.data_source_name,
+                        subject_id=subject_id,
+                    )
 
     logger.info("MindLAMP data pull process completed.")
     log_event(
@@ -295,6 +369,13 @@ if __name__ == "__main__":
         nargs="+",
         default=None,
         help="One or more subject IDs to filter by (space or comma separated)",
+    )
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=1,
+        help="Number of subject-dates to download in parallel (default: 1)",
     )
     parser.add_argument(
         "-d",
@@ -358,6 +439,10 @@ if __name__ == "__main__":
     )
 
     logger.info("Starting MindLAMP data pull script...")
+
+    if args.jobs < 1:
+        logger.error(f"--jobs must be at least 1, got {args.jobs}.")
+        sys.exit(1)
 
     subject_ids: Optional[List[str]] = None
     if args.subject_id:
@@ -427,6 +512,7 @@ if __name__ == "__main__":
         project_id=args.project_id,
         site_id=args.site_id,
         subject_ids=subject_ids,
+        jobs=args.jobs,
         start_date=start_date,
         end_date=end_date,
         force_start_date=force_start_date,

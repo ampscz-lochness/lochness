@@ -365,7 +365,7 @@ def fetch_subject_data_for_date(
     return data_pulls
 
 
-def pull_subject_data(
+def get_subject_dates_to_download(
     mindlamp_data_source: MindLAMPDataSource,
     subject_id: str,
     start_date: datetime,
@@ -373,9 +373,12 @@ def pull_subject_data(
     force_start_date: Optional[datetime],
     force_end_date: Optional[datetime],
     config_file: Path,
-) -> List[DataPull]:
+) -> Optional[Tuple[str, Path, List[datetime]]]:
     """
-    Fetch data for a subject from MindLAMP.
+    Determine which dates need to be downloaded for a subject.
+
+    Dates without an existing data pull in [start_date, end_date] are included,
+    along with every date in [force_start_date, force_end_date].
 
     Args:
         mindlamp_data_source (MindLAMPDataSource): The MindLAMP data source object.
@@ -387,10 +390,10 @@ def pull_subject_data(
         config_file (Path): Path to the configuration file.
 
     Returns:
-        List[DataPull]: A list of data pulls for the subject.
+        Optional[Tuple[str, Path, List[datetime]]]: The subject's MindLAMP ID,
+            the (created) directory to save data in, and the sorted dates to
+            download. None if the subject has no MindLAMP ID.
     """
-    data_pulls: List[DataPull] = []
-
     subject_mindlamp_id = get_mindlamp_id_for_subject(
         mindlamp_data_source=mindlamp_data_source,
         subject_id=subject_id,
@@ -405,7 +408,7 @@ def pull_subject_data(
                 f"and site {mindlamp_data_source.site_id}."
             )
         )
-        return data_pulls
+        return None
 
     # Drop time info from start/end dates
     start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -448,7 +451,51 @@ def pull_subject_data(
     logger.debug(
         f"Found {len(dates_to_download)} dates to fetch for subject {subject_id}."
     )
-    for date_dt in sorted(dates_to_download):
+
+    return subject_mindlamp_id, subject_mindlamp_data_root, sorted(dates_to_download)
+
+
+def pull_subject_data(
+    mindlamp_data_source: MindLAMPDataSource,
+    subject_id: str,
+    start_date: datetime,
+    end_date: datetime,
+    force_start_date: Optional[datetime],
+    force_end_date: Optional[datetime],
+    config_file: Path,
+) -> List[DataPull]:
+    """
+    Fetch data for a subject from MindLAMP.
+
+    Args:
+        mindlamp_data_source (MindLAMPDataSource): The MindLAMP data source object.
+        subject_id (str): The subject ID.
+        start_date (datetime): Start date for data fetch.
+        end_date (datetime): End date for data fetch.
+        force_start_date (Optional[datetime]): Start date for forced redownload.
+        force_end_date (Optional[datetime]): End date for forced redownload.
+        config_file (Path): Path to the configuration file.
+
+    Returns:
+        List[DataPull]: A list of data pulls for the subject.
+    """
+    data_pulls: List[DataPull] = []
+
+    download_plan = get_subject_dates_to_download(
+        mindlamp_data_source=mindlamp_data_source,
+        subject_id=subject_id,
+        start_date=start_date,
+        end_date=end_date,
+        force_start_date=force_start_date,
+        force_end_date=force_end_date,
+        config_file=config_file,
+    )
+    if download_plan is None:
+        return data_pulls
+
+    subject_mindlamp_id, subject_mindlamp_data_root, dates_to_download = download_plan
+
+    for date_dt in dates_to_download:
         pulls = fetch_subject_data_for_date(
             mindlamp_data_source=mindlamp_data_source,
             subject_id=subject_id,
