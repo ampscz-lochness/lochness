@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 import pytz
 
-from lochness.helpers import config, db
+from lochness.helpers import config, db, fs
 from lochness.helpers.timer import Timer
 from lochness.models.data_pulls import DataPull
 from lochness.models.files import File
@@ -62,7 +62,7 @@ def extract_audio_from_activities(
                 # Generate a unique audio file name for each audio event
                 audio_file_name = f"{audio_file_name_template}{suffix}"
                 audio_file_path = audio_data_root / audio_file_name
-                with open(audio_file_path, "wb", encoding="utf-8") as f:
+                with fs.atomic_write(audio_file_path, "wb") as f:
                     f.write(decode_bytes)
                 audio_file_paths.append(Path(audio_file_path))
                 logger.debug(f"Saved audio file: {audio_file_path}")
@@ -270,9 +270,9 @@ def fetch_subject_data_for_date(
     if sensor_events:
         sensor_file_name = f"{mindlamp_id}_{subject_id}_sensor_{date_str}.json"
         sensor_file_path = subject_mindlamp_data_root / sensor_file_name
-        with open(sensor_file_path, "w", encoding="utf-8") as f:
+        with fs.atomic_write(sensor_file_path, encoding="utf-8") as f:
             json.dump(sensor_events, f, indent=4)
-            logger.debug(f"Saved sensor events to {sensor_file_path}")
+        logger.debug(f"Saved sensor events to {sensor_file_path}")
 
         sensors_file = File(
             file_path=sensor_file_path,
@@ -311,9 +311,9 @@ def fetch_subject_data_for_date(
 
         activity_file_name = f"{mindlamp_id}_{subject_id}_activity_{date_str}.json"
         activity_file_path = subject_mindlamp_data_root / activity_file_name
-        with open(activity_file_path, "w", encoding="utf-8") as f:
+        with fs.atomic_write(activity_file_path, encoding="utf-8") as f:
             json.dump(activity_events, f, indent=4)
-            logger.debug(f"Saved activity events to {activity_file_path}")
+        logger.debug(f"Saved activity events to {activity_file_path}")
 
         activities_file = File(
             file_path=activity_file_path,
