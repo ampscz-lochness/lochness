@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 import pytz
 
-from lochness.helpers import config, db
+from lochness.helpers import config, db, fs
 from lochness.helpers.timer import Timer
 from lochness.models.data_pulls import DataPull
 from lochness.models.files import File
@@ -62,7 +62,7 @@ def extract_audio_from_activities(
                 # Generate a unique audio file name for each audio event
                 audio_file_name = f"{audio_file_name_template}{suffix}"
                 audio_file_path = audio_data_root / audio_file_name
-                with open(audio_file_path, "wb", encoding="utf-8") as f:
+                with fs.atomic_write(audio_file_path, "wb") as f:
                     f.write(decode_bytes)
                 audio_file_paths.append(Path(audio_file_path))
                 logger.debug(f"Saved audio file: {audio_file_path}")
@@ -151,7 +151,11 @@ def find_missing_data_dates(
     end_date: Optional[datetime] = None,
 ) -> Set[datetime]:
     """
-    Returns a set of dates for which there is no data pull for the given subject.
+    Returns a set of dates for which there is no sensor data pull for the given subject.
+
+    Only sensor pulls mark a date as pulled. Activity data is often legitimately
+    absent, so a date with only activity (or audio) pulls means the sensor fetch
+    failed or returned nothing, and the date should be retried.
 
     Args:
         subject_id (str): The subject ID.
@@ -161,7 +165,7 @@ def find_missing_data_dates(
         end_date (Optional[datetime]): The end date. Defaults to None, which sets it to yesterday.
 
     Returns:
-        Set[datetime]: A set of dates without data pulls.
+        Set[datetime]: A set of dates without sensor data pulls.
     """
 
     if end_date is None:
@@ -175,6 +179,13 @@ def find_missing_data_dates(
         config_file=config_file,
         data_source_name=mindlamp_ds.data_source_name,
     )
+
+    if "mindlamp_data_type" in data_pulls_df.columns:
+        data_pulls_df = data_pulls_df[
+            data_pulls_df["mindlamp_data_type"] == "sensor"
+        ].copy()
+    else:
+        data_pulls_df = data_pulls_df.iloc[0:0]
 
     all_dates = pd.date_range(start=start_date, end=end_date, freq="D", tz=pytz.UTC)
     if len(data_pulls_df) == 0:
@@ -259,9 +270,9 @@ def fetch_subject_data_for_date(
     if sensor_events:
         sensor_file_name = f"{mindlamp_id}_{subject_id}_sensor_{date_str}.json"
         sensor_file_path = subject_mindlamp_data_root / sensor_file_name
-        with open(sensor_file_path, "w", encoding="utf-8") as f:
+        with fs.atomic_write(sensor_file_path, encoding="utf-8") as f:
             json.dump(sensor_events, f, indent=4)
-            logger.debug(f"Saved sensor events to {sensor_file_path}")
+        logger.debug(f"Saved sensor events to {sensor_file_path}")
 
         sensors_file = File(
             file_path=sensor_file_path,
@@ -300,9 +311,9 @@ def fetch_subject_data_for_date(
 
         activity_file_name = f"{mindlamp_id}_{subject_id}_activity_{date_str}.json"
         activity_file_path = subject_mindlamp_data_root / activity_file_name
-        with open(activity_file_path, "w", encoding="utf-8") as f:
+        with fs.atomic_write(activity_file_path, encoding="utf-8") as f:
             json.dump(activity_events, f, indent=4)
-            logger.debug(f"Saved activity events to {activity_file_path}")
+        logger.debug(f"Saved activity events to {activity_file_path}")
 
         activities_file = File(
             file_path=activity_file_path,
@@ -365,7 +376,7 @@ def fetch_subject_data_for_date(
     return data_pulls
 
 
-def pull_subject_data(
+def get_subject_dates_to_download(
     mindlamp_data_source: MindLAMPDataSource,
     subject_id: str,
     start_date: datetime,
@@ -373,9 +384,12 @@ def pull_subject_data(
     force_start_date: Optional[datetime],
     force_end_date: Optional[datetime],
     config_file: Path,
-) -> List[DataPull]:
+) -> Optional[Tuple[str, Path, List[datetime]]]:
     """
-    Fetch data for a subject from MindLAMP.
+    Determine which dates need to be downloaded for a subject.
+
+    Dates without an existing data pull in [start_date, end_date] are included,
+    along with every date in [force_start_date, force_end_date].
 
     Args:
         mindlamp_data_source (MindLAMPDataSource): The MindLAMP data source object.
@@ -387,10 +401,10 @@ def pull_subject_data(
         config_file (Path): Path to the configuration file.
 
     Returns:
-        List[DataPull]: A list of data pulls for the subject.
+        Optional[Tuple[str, Path, List[datetime]]]: The subject's MindLAMP ID,
+            the (created) directory to save data in, and the sorted dates to
+            download. None if the subject has no MindLAMP ID.
     """
-    data_pulls: List[DataPull] = []
-
     subject_mindlamp_id = get_mindlamp_id_for_subject(
         mindlamp_data_source=mindlamp_data_source,
         subject_id=subject_id,
@@ -405,7 +419,7 @@ def pull_subject_data(
                 f"and site {mindlamp_data_source.site_id}."
             )
         )
-        return data_pulls
+        return None
 
     # Drop time info from start/end dates
     start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -448,7 +462,51 @@ def pull_subject_data(
     logger.debug(
         f"Found {len(dates_to_download)} dates to fetch for subject {subject_id}."
     )
-    for date_dt in sorted(dates_to_download):
+
+    return subject_mindlamp_id, subject_mindlamp_data_root, sorted(dates_to_download)
+
+
+def pull_subject_data(
+    mindlamp_data_source: MindLAMPDataSource,
+    subject_id: str,
+    start_date: datetime,
+    end_date: datetime,
+    force_start_date: Optional[datetime],
+    force_end_date: Optional[datetime],
+    config_file: Path,
+) -> List[DataPull]:
+    """
+    Fetch data for a subject from MindLAMP.
+
+    Args:
+        mindlamp_data_source (MindLAMPDataSource): The MindLAMP data source object.
+        subject_id (str): The subject ID.
+        start_date (datetime): Start date for data fetch.
+        end_date (datetime): End date for data fetch.
+        force_start_date (Optional[datetime]): Start date for forced redownload.
+        force_end_date (Optional[datetime]): End date for forced redownload.
+        config_file (Path): Path to the configuration file.
+
+    Returns:
+        List[DataPull]: A list of data pulls for the subject.
+    """
+    data_pulls: List[DataPull] = []
+
+    download_plan = get_subject_dates_to_download(
+        mindlamp_data_source=mindlamp_data_source,
+        subject_id=subject_id,
+        start_date=start_date,
+        end_date=end_date,
+        force_start_date=force_start_date,
+        force_end_date=force_end_date,
+        config_file=config_file,
+    )
+    if download_plan is None:
+        return data_pulls
+
+    subject_mindlamp_id, subject_mindlamp_data_root, dates_to_download = download_plan
+
+    for date_dt in dates_to_download:
         pulls = fetch_subject_data_for_date(
             mindlamp_data_source=mindlamp_data_source,
             subject_id=subject_id,

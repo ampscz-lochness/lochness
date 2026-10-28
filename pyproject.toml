@@ -25,6 +25,7 @@ dependencies = [
 [tool.ruff.lint]
 ignore = [
     "DTZ005", # allow no tz
+    "DTZ006", # allow no tz
     "E402", # Module level import not at top of file
     "TRY201", # allow raise e
     "UP006", # Dict use

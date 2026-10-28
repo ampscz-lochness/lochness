@@ -2,9 +2,11 @@
 Module for file system operations.
 """
 import logging
+import os
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
-from typing import List
+from typing import IO, Any, Generator, List
 
 from lochness.helpers import cli
 
@@ -88,6 +90,35 @@ def remove(path: Path) -> None:
     while parent != Path("/") and not any(parent.iterdir()):
         remove_directory(parent)
         parent = parent.parent
+
+
+@contextmanager
+def atomic_write(
+    file_path: Path, mode: str = "w", **kwargs: Any
+) -> Generator[IO, None, None]:
+    """
+    Write to a file atomically.
+
+    Content is written to a hidden temporary file in the same directory and
+    renamed onto file_path only once the write succeeds, so other processes
+    never see a partially written file.
+
+    Args:
+        file_path (Path): The final path of the file.
+        mode (str): The mode to open the temporary file with.
+        **kwargs: Additional arguments passed to open().
+
+    Yields:
+        IO: The open temporary file.
+    """
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = file_path.with_name(f".{file_path.name}.{os.getpid()}.part")
+    try:
+        with open(temp_path, mode, **kwargs) as f:
+            yield f
+        os.replace(temp_path, file_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def copy(source: Path, destination: Path) -> None:

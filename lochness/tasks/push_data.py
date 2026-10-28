@@ -25,7 +25,7 @@ import argparse
 import logging
 import tempfile
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from rich.logging import RichHandler
 
@@ -388,7 +388,7 @@ def push_file_to_sink(
 
             # 2. Remove the data sink location from old versions of this file
             # (the previous file at this path is no longer available at this sink)
-            remove_old_query = File.remove_availability_query(
+            remove_old_query = File.remove_location_from_previous_versions_query(
                 file_path=file_obj.file_path,
                 current_md5=file_obj.md5,  # type: ignore
                 location=ds_location,
@@ -473,6 +473,159 @@ def push_file_to_sink(
     #         },
     #     ).insert(config_file)
     #     return False
+
+
+def cleanup_local_file_after_push(file_obj: File, config_file: Path) -> None:
+    """
+    Remove a locally sourced file after all required sink pushes succeed.
+
+    Also removes the current hostname from the file's available_at metadata.
+    """
+    hostname_location = f"hn:{utils.get_hostname()}"
+
+    if file_obj.file_path.exists():
+        try:
+            fs.remove(file_obj.file_path)
+            logger.info(f"Removed local source file {file_obj.file_path}")
+        except OSError as cleanup_error:
+            logger.warning(
+                f"Failed to remove local file {file_obj.file_path}: {cleanup_error}"
+            )
+            Logs(
+                log_level="WARN",
+                log_message={
+                    "event": "data_push_local_file_cleanup_failed",
+                    "message": "Failed to remove local source file after push.",
+                    "file_path": str(file_obj.file_path),
+                    "hostname_location": hostname_location,
+                    "error": str(cleanup_error),
+                },
+            ).insert(config_file)
+            return
+    else:
+        logger.warning(
+            f"Local source file {file_obj.file_path} was already absent during cleanup"
+        )
+
+    update_query = file_obj.remove_location_from_current_file_query(
+        hostname_location
+    )
+    if update_query:
+        db.execute_queries(
+            config_file,
+            [update_query],
+            show_commands=False,
+            silent=True,
+        )
+
+    Logs(
+        log_level="INFO",
+        log_message={
+            "event": "data_push_local_file_removed",
+            "message": "Removed local source file after final sink push.",
+            "file_path": str(file_obj.file_path),
+            "hostname_location": hostname_location,
+        },
+    ).insert(config_file)
+
+
+def resolve_file_scope(
+    file_obj: File,
+    config_file: Path,
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Determine project/site scope for a file version.
+
+    Prefer DataPull scope for the matching file version. Fall back to
+    file metadata when needed.
+    """
+    if file_obj.md5 is not None:
+        data_pull = DataPull.get_most_recent_data_pull(
+            config_file=config_file,
+            file_path=str(file_obj.file_path),
+            file_md5=file_obj.md5,
+        )
+        if data_pull is not None:
+            return data_pull.project_id, data_pull.site_id
+
+    project_id = file_obj.file_metadata.get("project_id")
+    site_id = file_obj.file_metadata.get("site_id")
+    return project_id, site_id
+
+
+def cleanup_completed_local_files(
+    config_file: Path,
+    project_id: Optional[str] = None,
+    site_id: Optional[str] = None,
+) -> int:
+    """
+    Remove locally available files that are already fully pushed.
+
+    This catches re-downloaded files (such as MindLAMP duplicates) whose
+    file versions are already present in all active sinks and therefore do not
+    appear in the normal files-to-push query.
+    """
+    hostname_location = f"hn:{utils.get_hostname()}"
+    candidates = File.get_files_with_available_location(
+        config_file=config_file,
+        location=hostname_location,
+    )
+
+    cleaned_count = 0
+    skipped_missing_scope = 0
+    skipped_no_pushes = 0
+    skipped_pending = 0
+
+    for file_obj in candidates:
+        file_project_id, file_site_id = resolve_file_scope(file_obj, config_file)
+
+        if not file_project_id or not file_site_id:
+            skipped_missing_scope += 1
+            continue
+
+        if project_id and file_project_id != project_id:
+            continue
+        if site_id and file_site_id != site_id:
+            continue
+
+        if not file_obj.has_any_pushes(config_file):
+            skipped_no_pushes += 1
+            continue
+
+        if file_obj.has_pending_pushes(
+            config_file=config_file,
+            project_id=file_project_id,
+            site_id=file_site_id,
+        ):
+            skipped_pending += 1
+            continue
+
+        cleanup_local_file_after_push(file_obj=file_obj, config_file=config_file)
+        cleaned_count += 1
+
+    logger.info(
+        "Local cleanup sweep summary: "
+        f"cleaned={cleaned_count}, "
+        f"skipped_missing_scope={skipped_missing_scope}, "
+        f"skipped_no_pushes={skipped_no_pushes}, "
+        f"skipped_pending={skipped_pending}"
+    )
+    Logs(
+        log_level="INFO",
+        log_message={
+            "event": "data_push_local_cleanup_sweep_complete",
+            "message": "Finished cleanup sweep for locally available files.",
+            "cleaned_count": cleaned_count,
+            "skipped_missing_scope": skipped_missing_scope,
+            "skipped_no_pushes": skipped_no_pushes,
+            "skipped_pending": skipped_pending,
+            "project_id": project_id,
+            "site_id": site_id,
+            "hostname_location": hostname_location,
+        },
+    ).insert(config_file)
+
+    return cleaned_count
 
 
 def simple_push_file_to_sink(file_path: Path):
@@ -787,7 +940,7 @@ def push_all_data(
                                     "lochness_root"]  # type: ignore
                     relative_path = str(file_obj.file_path.relative_to(
                         lochness_root))
-                push_file_to_sink(
+                push_succeeded = push_file_to_sink(
                     file_obj=file_obj,
                     data_sink=active_data_sink,
                     data_source_name=associated_data_source_name,
@@ -799,6 +952,20 @@ def push_all_data(
                     source_file_path=source_file_path,
                     relative_path=relative_path,
                 )
+
+                if (
+                    push_succeeded
+                    and source_result.source_type == "local"
+                    and not file_obj.has_pending_pushes(
+                        config_file=config_file,
+                        project_id=active_data_sink.project_id,
+                        site_id=active_data_sink.site_id,
+                    )
+                ):
+                    cleanup_local_file_after_push(
+                        file_obj=file_obj,
+                        config_file=config_file,
+                    )
             finally:
                 # Clean up temporary file if we pulled from remote
                 if temp_file_path and temp_file_path.exists():
@@ -822,6 +989,17 @@ def push_all_data(
                 "data_sink_id": data_sink_id,
             },
         ).insert(config_file)
+
+    cleaned_count = cleanup_completed_local_files(
+        config_file=config_file,
+        project_id=project_id,
+        site_id=site_id,
+    )
+    if cleaned_count > 0:
+        logger.info(
+            f"Post-push cleanup sweep removed {cleaned_count} local files "
+            "that were already fully pushed."
+        )
 
 
 if __name__ == "__main__":

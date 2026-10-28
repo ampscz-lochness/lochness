@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 import requests
 
@@ -247,18 +247,82 @@ def find_drive_by_name(drives: List[Dict], name: str) -> Optional[Dict]:
     return drive
 
 
-def should_download_file(local_file_path: Path, quick_xor_hash: Optional[str]) -> bool:
+def is_pulled_and_pushed(
+    local_file_path: Path,
+    quick_xor_hash: Optional[str],
+    config_file: Path,
+    project_id: str,
+    site_id: str,
+) -> bool:
+    """
+    Checks the database for whether this exact remote file version was already
+    pulled and has since been pushed to every active sink.
+
+    Files in this state are removed locally by the post-push cleanup sweep
+    (see `lochness.tasks.push_data.cleanup_completed_local_files`), so their
+    absence on disk must not trigger a re-download.
+
+    Args:
+        local_file_path (Path): The path the file is (or was) saved to locally.
+        quick_xor_hash (Optional[str]): The QuickXorHash from the remote file metadata.
+        config_file (Path): Path to the configuration file for DB operations.
+        project_id (str): Project ID for the sink scope.
+        site_id (str): Site ID for the sink scope.
+
+    Returns:
+        bool: True if the remote version was already pulled and fully pushed.
+    """
+    if not quick_xor_hash:
+        return False
+
+    data_pull = DataPull.get_most_recent_data_pull_for_file_path(
+        config_file=config_file, file_path=str(local_file_path)
+    )
+    if data_pull is None:
+        return False
+
+    if data_pull.pull_metadata.get("quickxorhash") != quick_xor_hash:
+        return False
+
+    if not File.version_has_any_pushes(
+        config_file=config_file,
+        file_path=local_file_path,
+        file_md5=data_pull.file_md5,
+    ):
+        return False
+
+    return not File.version_has_pending_pushes(
+        config_file=config_file,
+        file_path=local_file_path,
+        file_md5=data_pull.file_md5,
+        project_id=project_id,
+        site_id=site_id,
+    )
+
+
+def should_download_file(
+    local_file_path: Path,
+    quick_xor_hash: Optional[str],
+    config_file: Optional[Path] = None,
+    project_id: Optional[str] = None,
+    site_id: Optional[str] = None,
+) -> bool:
     """
     Determines whether a file should be downloaded based on its local presence and hash.
 
-    TODO: Currently checks for a local .quickxorhash file. In the future, consider storing
-    the hash in a database or metadata file for better integrity checks.
+    If the file is present locally, its hidden .quickxorhash file is compared with the
+    remote hash. If the file is absent locally, the database is checked for whether the
+    same remote version was already pulled and pushed (and then cleaned up locally).
 
     Returns True if the file should be downloaded, False otherwise.
 
     Args:
         local_file_path (Path): The path to the local file.
         quick_xor_hash (Optional[str]): The QuickXorHash from the remote file metadata.
+        config_file (Optional[Path]): Path to the configuration file for DB operations.
+            The database check is skipped when not provided.
+        project_id (Optional[str]): Project ID for the sink scope.
+        site_id (Optional[str]): Site ID for the sink scope.
 
     Returns:
         bool: True if the file should be downloaded, False otherwise.
@@ -286,9 +350,23 @@ def should_download_file(local_file_path: Path, quick_xor_hash: Optional[str]) -
         logger.info(
             f"Local file exists but no hash file for {local_file_path}. Re-downloading."
         )
-    else:
-        logger.info(f"Local file does not exist. Downloading {local_file_path}.")
+        return True
 
+    if (
+        config_file is not None
+        and project_id is not None
+        and site_id is not None
+        and is_pulled_and_pushed(
+            local_file_path, quick_xor_hash, config_file, project_id, site_id
+        )
+    ):
+        logger.info(
+            f"{local_file_path} was already pulled and pushed, and removed locally "
+            "after push. Skipping download."
+        )
+        return False
+
+    logger.info(f"Local file does not exist. Downloading {local_file_path}.")
     return True
 
 
@@ -338,6 +416,45 @@ def extract_info(
     return subject_id, form_title, dt_str, timestamp
 
 
+def mark_removed_files(
+    expected_filenames: List[str],
+    output_dir: Path,
+    config_file: Path,
+) -> None:
+    """
+    Mark local files as deleted when they are missing from expected filenames.
+
+    Args:
+        expected_filenames (List[str]): Filenames expected to exist locally.
+        output_dir (Path): Directory to inspect for local files.
+        config_file (Path): Path to the configuration file for DB operations.
+
+    Returns:
+        None
+    """
+    expected_filename_set: Set[str] = {
+        file_name for file_name in expected_filenames if file_name
+    }
+
+    # Label previously downloaded files that are now removed from the form
+    removed_file_paths = [
+        x
+        for x in output_dir.glob("*")
+        if x.is_file()
+        and not x.name.endswith(".quickxorhash")
+        and x.name not in expected_filename_set
+    ]
+
+    for removed_file_path in removed_file_paths:
+        file_model = File(file_path=removed_file_path)
+        file_model.md5 = "DELETED_FROM_TEAMS_FORM"
+        db.execute_queries(
+            config_file,
+            file_model.to_sql_queries_with_availability_update(),
+            show_commands=False,
+        )
+
+
 def download_subdirectory(
     files: List[Dict],
     subject_id: str,
@@ -346,6 +463,7 @@ def download_subdirectory(
     data_source_name: str,
     output_dir: Path,
     config_file: Path,
+    manage_deletions: bool = True,
 ) -> None:
     """
     Download updated files to the output_dir and clean up previous files
@@ -358,25 +476,23 @@ def download_subdirectory(
         data_source_name (str): The data source name for logging purposes.
         output_dir (Path): The directory to save downloaded files.
         config_file (Path): Path to the configuration file for database operations.
+        manage_deletions (bool): If True, mark local files that are not present
+            in this file listing as deleted. This should be disabled when files
+            are pulled from multiple remote folders into a shared output
+            directory and deletions are reconciled once from an aggregated
+            filename set.
     Returns:
         None
     Raises:
         RuntimeError: If a file download fails.
     """
 
-    # Label previously downloaded files that are now removed from the form
-    filename_list = [x["name"] for x in files]
-    removed_file_paths = [
-        x for x in output_dir.glob("*") if x.name not in filename_list
-    ]
-
-    for removed_file_path in removed_file_paths:
-        file_model = File(file_path=removed_file_path)
-        file_model.md5 = "DELETED_FROM_TEAMS_FORM"
-        db.execute_queries(
-            config_file,
-            file_model.to_sql_queries_with_availability_update(),
-            show_commands=False,
+    if manage_deletions:
+        expected_filenames = [x["name"] for x in files if "name" in x]
+        mark_removed_files(
+            expected_filenames=expected_filenames,
+            output_dir=output_dir,
+            config_file=config_file,
         )
 
     # Download all other files
@@ -393,7 +509,13 @@ def download_subdirectory(
 
         file_target_path = output_dir / file_name
 
-        if should_download_file(local_file_path, quick_xor_hash):
+        if should_download_file(
+            local_file_path,
+            quick_xor_hash,
+            config_file=config_file,
+            project_id=project_id,
+            site_id=site_id,
+        ):
             download_url = f.get("@microsoft.graph.downloadUrl")
             if download_url:
                 start_time = datetime.now()
@@ -585,7 +707,8 @@ def download_new_or_updated_files(
     potential_file_uploads_without_form_update: bool,
     without_form: bool,
     config_file: Path,
-) -> None:
+    manage_deletions: bool = True,
+) -> List[str]:
     """
     Download all files under the subfolder from a submitted form
 
@@ -600,10 +723,12 @@ def download_new_or_updated_files(
         data_source_name (str): The data source name for logging purposes.
         output_dir_root (Path): The root directory to save downloaded files.
         config_file (Path): Path to the configuration file for database operations.
+        manage_deletions (bool): If True, reconcile deletions for this folder.
+            Disable when running aggregated deletion reconciliation across
+            multiple remote folders.
 
     Returns:
-        None
-        None
+        List[str]: Names returned by this folder listing.
     Raises:
         RuntimeError: If a file download fails.
     """
@@ -612,6 +737,8 @@ def download_new_or_updated_files(
     logger.info("Found subfolder: %s", subfolder_name)
 
     files = sharepoint_api.list_folder_items(drive_id, subfolder_id, headers)
+    expected_filenames = [f["name"] for f in files if "name" in f]
+
     if without_form:
         output_dir = output_dir_root
     else:
@@ -623,7 +750,7 @@ def download_new_or_updated_files(
             logger.debug(
                 "No response.submitted.json found in %s, skipping.", subfolder_name
             )
-            return
+            return expected_filenames
 
         output_dir = is_response_json_updated(
             response_json_file, subfolder_name, subject_id,
@@ -641,4 +768,7 @@ def download_new_or_updated_files(
             data_source_name,
             output_dir,
             config_file=config_file,
+            manage_deletions=manage_deletions,
         )
+
+    return expected_filenames

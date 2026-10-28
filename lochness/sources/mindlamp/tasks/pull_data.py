@@ -24,8 +24,10 @@ except ValueError:
 
 import argparse
 import logging
+from collections import Counter, defaultdict
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
 from rich.logging import RichHandler
@@ -108,9 +110,14 @@ def pull_all_data(
     force_end_date: Optional[datetime],
     project_id: Optional[str] = None,
     site_id: Optional[str] = None,
+    subject_ids: Optional[List[str]] = None,
+    jobs: int = 1,
 ):
     """
     Main function to pull data for all active MindLAMP data sources and subjects.
+
+    If subject_ids is provided, only those subjects are pulled.
+    Up to `jobs` subject-dates are downloaded in parallel.
     """
     log_event(
         config_file=config_file,
@@ -168,6 +175,7 @@ def pull_all_data(
         extra={"count": len(active_mindlamp_data_sources)},
     )
 
+    total_data_pulls = 0
     for mindlamp_data_source in active_mindlamp_data_sources:
         # Get subjects for this data source
         subjects_in_db = Subject.get_subjects_for_project_site(
@@ -175,6 +183,13 @@ def pull_all_data(
             site_id=mindlamp_data_source.site_id,
             config_file=config_file,
         )
+
+        if subject_ids:
+            subjects_in_db = [
+                subject
+                for subject in subjects_in_db
+                if subject.subject_id in subject_ids
+            ]
 
         if not subjects_in_db:
             logger.info(
@@ -215,8 +230,12 @@ def pull_all_data(
             extra={"count": len(subjects_in_db)},
         )
 
+        # Plan the (subject, date) downloads, then run them across `jobs` workers.
+        # Data sources are processed one at a time, since LAMP.connect() sets
+        # module-level clients and data sources may use different credentials.
+        download_tasks: List[Tuple[str, str, Path, datetime]] = []
         for subject in subjects_in_db:
-            data_pulls = mindlamp_utils.pull_subject_data(
+            download_plan = mindlamp_utils.get_subject_dates_to_download(
                 mindlamp_data_source=mindlamp_data_source,
                 subject_id=subject.subject_id,
                 start_date=start_date,
@@ -225,27 +244,107 @@ def pull_all_data(
                 force_end_date=force_end_date,
                 config_file=config_file,
             )
+            if download_plan is None:
+                continue
 
-            if data_pulls:
-                logger.info(
-                    f"Fetched {len(data_pulls)} data pulls for subject {subject.subject_id} "
-                    f"in project {mindlamp_data_source.project_id} and site "
-                    f"{mindlamp_data_source.site_id}."
+            mindlamp_id, subject_mindlamp_data_root, dates_to_download = download_plan
+            for date_dt in dates_to_download:
+                download_tasks.append(
+                    (subject.subject_id, mindlamp_id, subject_mindlamp_data_root, date_dt)
                 )
-                log_event(
+
+        logger.info(
+            f"Downloading {len(download_tasks)} subject-dates for "
+            f"{mindlamp_data_source.data_source_name} using {jobs} parallel job(s)."
+        )
+
+        remaining_dates_per_subject: Dict[str, int] = Counter(
+            task[0] for task in download_tasks
+        )
+        pulls_per_subject: Dict[str, int] = defaultdict(int)
+
+        with ThreadPoolExecutor(max_workers=jobs) as executor:
+            futures: Dict[Future[List[Any]], Tuple[str, datetime]] = {
+                executor.submit(
+                    mindlamp_utils.fetch_subject_data_for_date,
+                    mindlamp_data_source=mindlamp_data_source,
+                    subject_id=subject_id,
+                    mindlamp_id=mindlamp_id,
+                    datetime_dt=date_dt,
                     config_file=config_file,
-                    log_level="INFO",
-                    event="mindlamp_data_pull_subject_complete",
-                    message=(
-                        f"Fetched {len(data_pulls)} data pulls for subject "
-                        f"{subject.subject_id} in project {mindlamp_data_source.project_id} "
-                        f"and site {mindlamp_data_source.site_id}."
-                    ),
-                    project_id=mindlamp_data_source.project_id,
-                    site_id=mindlamp_data_source.site_id,
-                    data_source_name=mindlamp_data_source.data_source_name,
-                    subject_id=subject.subject_id,
-                )
+                    subject_mindlamp_data_root=subject_mindlamp_data_root,
+                ): (subject_id, date_dt)
+                for (
+                    subject_id,
+                    mindlamp_id,
+                    subject_mindlamp_data_root,
+                    date_dt,
+                ) in download_tasks
+            }
+
+            for future in as_completed(futures):
+                subject_id, date_dt = futures[future]
+                try:
+                    num_new_pulls = len(future.result())
+                    pulls_per_subject[subject_id] += num_new_pulls
+                    total_data_pulls += num_new_pulls
+                except Exception as e:  # pylint: disable=broad-except
+                    logger.error(
+                        f"Failed to fetch data for subject {subject_id} on "
+                        f"{date_dt.date()}: {e}"
+                    )
+                    log_event(
+                        config_file=config_file,
+                        log_level="ERROR",
+                        event="mindlamp_data_pull_date_failed",
+                        message=(
+                            f"Failed to fetch data for subject {subject_id} on "
+                            f"{date_dt.date()}: {e}"
+                        ),
+                        project_id=mindlamp_data_source.project_id,
+                        site_id=mindlamp_data_source.site_id,
+                        data_source_name=mindlamp_data_source.data_source_name,
+                        subject_id=subject_id,
+                        extra={"data_date_utc": str(date_dt.date())},
+                    )
+
+                remaining_dates_per_subject[subject_id] -= 1
+                if remaining_dates_per_subject[subject_id] > 0:
+                    continue
+
+                num_pulls = pulls_per_subject[subject_id]
+                if num_pulls:
+                    logger.info(
+                        f"Fetched {num_pulls} data pulls for subject {subject_id} "
+                        f"in project {mindlamp_data_source.project_id} and site "
+                        f"{mindlamp_data_source.site_id}."
+                    )
+                    log_event(
+                        config_file=config_file,
+                        log_level="INFO",
+                        event="mindlamp_data_pull_subject_complete",
+                        message=(
+                            f"Fetched {num_pulls} data pulls for subject "
+                            f"{subject_id} in project {mindlamp_data_source.project_id} "
+                            f"and site {mindlamp_data_source.site_id}."
+                        ),
+                        project_id=mindlamp_data_source.project_id,
+                        site_id=mindlamp_data_source.site_id,
+                        data_source_name=mindlamp_data_source.data_source_name,
+                        subject_id=subject_id,
+                    )
+
+    logger.info(f"Recorded {total_data_pulls} DataPulls in this run.")
+    log_event(
+        config_file=config_file,
+        log_level="INFO",
+        event="mindlamp_data_pull_total",
+        message=f"Recorded {total_data_pulls} DataPulls in this run.",
+        project_id=project_id,
+        site_id=site_id,
+        data_source_name=None,
+        extra={"count": total_data_pulls},
+    )
 
     logger.info("MindLAMP data pull process completed.")
     log_event(
@@ -279,6 +378,21 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--project-id", type=str, help="Project ID to filter by")
     parser.add_argument("-s", "--site-id", type=str, help="Site ID to filter by")
     parser.add_argument(
+        "-sid",
+        "--subject-id",
+        type=str,
+        nargs="+",
+        default=None,
+        help="One or more subject IDs to filter by (space or comma separated)",
+    )
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=1,
+        help="Number of subject-dates to download in parallel (default: 1)",
+    )
+    parser.add_argument(
         "-d",
         "--days-to-pull",
         type=int,
@@ -291,8 +405,9 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help=(
-            "Number of days of data to redownload "
-            "(default: 7 when days mode is used)"
+            "Number of days, ending at the end date, to redownload even if already "
+            "pulled. Ignored if --force-start-date/--force-end-date are given. "
+            "Use 0 to disable (default: 7)"
         ),
     )
     parser.add_argument(
@@ -341,27 +456,47 @@ if __name__ == "__main__":
 
     logger.info("Starting MindLAMP data pull script...")
 
+    if args.jobs < 1:
+        logger.error(f"--jobs must be at least 1, got {args.jobs}.")
+        sys.exit(1)
+
+    subject_ids: Optional[List[str]] = None
+    if args.subject_id:
+        subject_ids = [
+            sid.strip()
+            for value in args.subject_id
+            for sid in value.split(",")
+            if sid.strip()
+        ]
+        logger.info(f"Filtering to subjects: {', '.join(subject_ids)}")
+
     # Validation logic for date/days arguments
     date_range_partially_provided = (
         args.start_date is not None or args.end_date is not None
     )
     date_range_provided = args.start_date is not None and args.end_date is not None
-    days_provided = (
-        args.days_to_pull is not None or args.days_to_redownload is not None
-    )
-
     if date_range_partially_provided and not date_range_provided:
         logger.error(
             "Both start_date and end_date must be provided when using date-range mode."
         )
         sys.exit(1)
 
-    if date_range_provided and days_provided:
+    if date_range_provided and args.days_to_pull is not None:
         logger.error(
-            "Both date range (start_date/end_date) and days-based arguments "
-            "(days_to_pull/days_to_redownload) provided. Please provide only one method."
+            "Both date range (start_date/end_date) and days_to_pull provided. "
+            "Please provide only one method."
         )
         sys.exit(1)
+
+    if args.days_to_redownload is not None and args.days_to_redownload < 0:
+        logger.error(
+            f"--days-to-redownload must be at least 0, got {args.days_to_redownload}."
+        )
+        sys.exit(1)
+
+    days_to_redownload = (
+        args.days_to_redownload if args.days_to_redownload is not None else 7
+    )
     # Parse date arguments if provided, else use days-based logic
     if date_range_provided:
         start_date = parse_date(args.start_date)
@@ -369,35 +504,35 @@ if __name__ == "__main__":
         logger.info(f"Using date range: {start_date.date()} to {end_date.date()}")
     else:
         days_to_pull = args.days_to_pull if args.days_to_pull is not None else 14
-        days_to_redownload = (
-            args.days_to_redownload if args.days_to_redownload is not None else 7
-        )
         end_date = datetime.now(tz=pytz.UTC) - timedelta(days=1)
         start_date = end_date - timedelta(days=days_to_pull - 1)
         logger.info(f"Days to pull: {days_to_pull}")
         logger.info(f"Pulling data from {start_date.date()} to {end_date.date()}")
 
+    force_start_date: Optional[datetime] = None
+    force_end_date: Optional[datetime] = None
     if args.force_start_date and args.force_end_date:
         force_start_date = parse_date(args.force_start_date)
         force_end_date = parse_date(args.force_end_date)
         logger.info(
             f"Redownloading data from {force_start_date.date()} to {force_end_date.date()}"
         )
-    else:
+    elif days_to_redownload > 0:
         force_end_date = end_date
-        days_to_redownload = (
-            args.days_to_redownload if args.days_to_redownload is not None else 7
-        )
         force_start_date = force_end_date - timedelta(days=days_to_redownload - 1)
         logger.info(f"Days to redownload: {days_to_redownload}")
         logger.info(
             f"Redownloading data from {force_start_date.date()} to {force_end_date.date()}"
         )
+    else:
+        logger.info("Skipping forced redownload (days to redownload is 0).")
 
     pull_all_data(
         config_file=config_file,
         project_id=args.project_id,
         site_id=args.site_id,
+        subject_ids=subject_ids,
+        jobs=args.jobs,
         start_date=start_date,
         end_date=end_date,
         force_start_date=force_start_date,

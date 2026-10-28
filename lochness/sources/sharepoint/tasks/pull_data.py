@@ -21,7 +21,7 @@ sys.path.append(str(root_dir))
 import argparse
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from rich.logging import RichHandler
 
@@ -170,9 +170,16 @@ def fetch_subject_data(
 
             if session_folders is None:
                 continue
-                
+
+            use_aggregated_deletions = (
+                without_form
+                and subdirs_under_each_subject_dir
+                and len(session_folders) > 1
+            )
+            expected_filenames_across_sessions: Set[str] = set()
+
             for session_folder in session_folders:
-                sharepoint_utils.download_new_or_updated_files(
+                expected_filenames = sharepoint_utils.download_new_or_updated_files(
                     session_folder,
                     drive_id,
                     headers,
@@ -185,6 +192,17 @@ def fetch_subject_data(
                     output_dir,
                     potential_file_uploads_without_form_update,
                     without_form=without_form,
+                    config_file=config_file,
+                    manage_deletions=not use_aggregated_deletions,
+                )
+
+                if use_aggregated_deletions:
+                    expected_filenames_across_sessions.update(expected_filenames)
+
+            if use_aggregated_deletions:
+                sharepoint_utils.mark_removed_files(
+                    expected_filenames=list(expected_filenames_across_sessions),
+                    output_dir=output_dir,
                     config_file=config_file,
                 )
 

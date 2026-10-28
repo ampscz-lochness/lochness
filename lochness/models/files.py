@@ -287,7 +287,7 @@ class File:
         hostname_location = f"hn:{utils.get_hostname()}"
 
         if self.md5 is not None:
-            remove_old_query = File.remove_availability_query(
+            remove_old_query = File.remove_location_from_previous_versions_query(
                 file_path=self.file_path,
                 current_md5=self.md5,
                 location=hostname_location,
@@ -327,6 +327,7 @@ class File:
                 AND dp.project_id = '{project_id}'
                 AND dp.site_id = '{site_id}'
             )
+            WHERE f.file_md5 <> 'DELETED_FROM_TEAMS_FORM'
         )
         SELECT files.*
         FROM latest_files files
@@ -368,7 +369,108 @@ class File:
         return files
 
     @staticmethod
-    def remove_availability_query(
+    def get_files_with_available_location(
+        config_file: Path,
+        location: str,
+    ) -> List["File"]:
+        """
+        Return file records whose available_at metadata includes the given location.
+
+        Args:
+            config_file (Path): Path to the database configuration file.
+            location (str): Location identifier such as 'hn:hostname' or 'ds:123'.
+
+        Returns:
+            List[File]: Matching file records.
+        """
+        location_sanitized = db.sanitize_string(location)
+
+        query = f"""
+        SELECT *
+        FROM files
+        WHERE file_metadata->'available_at' @> '["{location_sanitized}"]'::jsonb
+        ORDER BY file_m_time DESC;
+        """
+
+        db_df = db.execute_sql(
+            config_file=config_file,
+            query=query,
+        )
+
+        if db_df.empty:
+            return []
+
+        files: List[File] = []
+        for _, row in db_df.iterrows():
+            file_obj = object.__new__(File)
+            file_obj.file_path = Path(row["file_path"])
+            file_obj.file_name = row["file_name"]
+            file_obj.file_type = row["file_type"]
+            file_obj.file_size_mb = row["file_size_mb"]
+            file_obj.m_time = row["file_m_time"]
+            file_obj.md5 = row["file_md5"]
+            file_obj.file_metadata = (
+                row["file_metadata"] if row["file_metadata"] else {}
+            )
+            file_obj.internal_metadata = {}
+
+            files.append(file_obj)
+
+        return files
+
+    def has_any_pushes(self, config_file: Path) -> bool:
+        """
+        Check whether this file version has at least one recorded push.
+
+        Args:
+            config_file (Path): Path to the database configuration file.
+
+        Returns:
+            bool: True if at least one data_push record exists for this file version.
+        """
+        if self.md5 is None:
+            return False
+
+        return File.version_has_any_pushes(
+            config_file=config_file,
+            file_path=self.file_path,
+            file_md5=self.md5,
+        )
+
+    @staticmethod
+    def version_has_any_pushes(
+        config_file: Path, file_path: Path, file_md5: str
+    ) -> bool:
+        """
+        Check whether a file version has at least one recorded push.
+
+        Unlike `has_any_pushes`, this does not require the file to exist
+        locally, so it can be used for files cleaned up after a push.
+
+        Args:
+            config_file (Path): Path to the database configuration file.
+            file_path (Path): Path to the file.
+            file_md5 (str): MD5 hash of the file version.
+
+        Returns:
+            bool: True if at least one data_push record exists for this file version.
+        """
+        f_path = db.sanitize_string(str(file_path))
+        file_md5 = db.sanitize_string(file_md5)
+
+        query = f"""
+        SELECT 1
+        FROM data_push
+        WHERE file_path = '{f_path}'
+            AND file_md5 = '{file_md5}'
+        LIMIT 1;
+        """
+
+        result_df = db.execute_sql(config_file, query)
+        return not result_df.empty
+
+    @staticmethod
+    def remove_location_from_previous_versions_query(
         file_path: Path,
         current_md5: str,
         location: str,
@@ -464,3 +566,112 @@ class File:
             """
             return update_query
         return ""
+
+    def remove_location_from_current_file_query(self, location: str) -> str:
+        """
+        Generate SQL query to remove a location from the file's available_at metadata.
+
+        Args:
+            location (str): Location identifier (e.g., 'ds:123' or 'hn:hostname')
+
+        Returns:
+            str: SQL query to update the file's metadata, or empty string if
+                the location does not exist.
+        """
+        available_at = self.file_metadata.get("available_at", [])
+        if isinstance(available_at, str):
+            available_at = [available_at]
+        elif not isinstance(available_at, list):
+            available_at = []
+
+        if location in available_at:
+            self.file_metadata["available_at"] = [
+                entry for entry in available_at if entry != location
+            ]
+
+            file_metadata_json = db.sanitize_json(self.file_metadata)
+            f_path = db.sanitize_string(str(self.file_path))
+            update_query = f"""
+            UPDATE files
+            SET file_metadata = '{file_metadata_json}'
+            WHERE file_path = '{f_path}' AND file_md5 = '{self.md5}';
+            """
+            return update_query
+        return ""
+
+    def has_pending_pushes(
+        self,
+        config_file: Path,
+        project_id: str,
+        site_id: str,
+    ) -> bool:
+        """
+        Check whether this file version still needs to be pushed to any active sink.
+
+        Args:
+            config_file (Path): Path to the database configuration file.
+            project_id (str): Project ID for the sink scope.
+            site_id (str): Site ID for the sink scope.
+
+        Returns:
+            bool: True if at least one active data sink for the project/site does
+                not yet have a matching data_push record for this file version.
+        """
+        if self.md5 is None:
+            return False
+
+        return File.version_has_pending_pushes(
+            config_file=config_file,
+            file_path=self.file_path,
+            file_md5=self.md5,
+            project_id=project_id,
+            site_id=site_id,
+        )
+
+    @staticmethod
+    def version_has_pending_pushes(
+        config_file: Path,
+        file_path: Path,
+        file_md5: str,
+        project_id: str,
+        site_id: str,
+    ) -> bool:
+        """
+        Check whether a file version still needs to be pushed to any active sink.
+
+        Unlike `has_pending_pushes`, this does not require the file to exist
+        locally, so it can be used for files cleaned up after a push.
+
+        Args:
+            config_file (Path): Path to the database configuration file.
+            file_path (Path): Path to the file.
+            file_md5 (str): MD5 hash of the file version.
+            project_id (str): Project ID for the sink scope.
+            site_id (str): Site ID for the sink scope.
+
+        Returns:
+            bool: True if at least one active data sink for the project/site does
+                not yet have a matching data_push record for this file version.
+        """
+        f_path = db.sanitize_string(str(file_path))
+        file_md5 = db.sanitize_string(file_md5)
+        sanitized_project_id = db.sanitize_string(project_id)
+        sanitized_site_id = db.sanitize_string(site_id)
+
+        query = f"""
+        SELECT ds.data_sink_id
+        FROM data_sinks ds
+        LEFT JOIN data_push dp ON (
+            dp.data_sink_id = ds.data_sink_id
+            AND dp.file_path = '{f_path}'
+            AND dp.file_md5 = '{file_md5}'
+        )
+        WHERE ds.project_id = '{sanitized_project_id}'
+            AND ds.site_id = '{sanitized_site_id}'
+            AND ds.data_sink_is_active = TRUE
+            AND dp.data_sink_id IS NULL
+        LIMIT 1;
+        """
+
+        result_df = db.execute_sql(config_file, query)
+        return not result_df.empty
