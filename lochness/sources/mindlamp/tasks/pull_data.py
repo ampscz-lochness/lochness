@@ -175,6 +175,7 @@ def pull_all_data(
         extra={"count": len(active_mindlamp_data_sources)},
     )
 
+    total_data_pulls = 0
     for mindlamp_data_source in active_mindlamp_data_sources:
         # Get subjects for this data source
         subjects_in_db = Subject.get_subjects_for_project_site(
@@ -284,7 +285,9 @@ def pull_all_data(
             for future in as_completed(futures):
                 subject_id, date_dt = futures[future]
                 try:
-                    pulls_per_subject[subject_id] += len(future.result())
+                    num_new_pulls = len(future.result())
+                    pulls_per_subject[subject_id] += num_new_pulls
+                    total_data_pulls += num_new_pulls
                 except Exception as e:  # pylint: disable=broad-except
                     logger.error(
                         f"Failed to fetch data for subject {subject_id} on "
@@ -330,6 +333,18 @@ def pull_all_data(
                         data_source_name=mindlamp_data_source.data_source_name,
                         subject_id=subject_id,
                     )
+
+    logger.info(f"Recorded {total_data_pulls} DataPulls in this run.")
+    log_event(
+        config_file=config_file,
+        log_level="INFO",
+        event="mindlamp_data_pull_total",
+        message=f"Recorded {total_data_pulls} DataPulls in this run.",
+        project_id=project_id,
+        site_id=site_id,
+        data_source_name=None,
+        extra={"count": total_data_pulls},
+    )
 
     logger.info("MindLAMP data pull process completed.")
     log_event(
