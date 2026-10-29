@@ -12,6 +12,8 @@ The data pull process:
 3. Processes and stores the data in the file system
 4. Supports both date range mode and days-based mode for flexible scheduling
 5. Logs all operations for audit trail
+6. Triggers `lochness_push_data` (scoped to the same project/site) and waits
+   for it to complete, then emits the `MindLAMP Data Pushed` asset
 
 Parameters:
     - project_id: Optional project ID to limit data pull scope
@@ -31,11 +33,16 @@ import datetime
 from airflow.sdk import Asset, DAG, Param
 from airflow.sdk.definitions.param import ParamsDict
 from airflow.providers.standard.operators.bash import BashOperator
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 
 # Define custom asset for MindLAMP data
 mindlamp_data_asset = Asset(
     uri="x-dpacc://mindlamp-data",
     name="MindLAMP Data",
+)
+mindlamp_data_pushed_asset = Asset(
+    uri="x-dpacc://mindlamp-data-pushed",
+    name="MindLAMP Data Pushed",
 )
 
 # Define variables
@@ -200,5 +207,21 @@ echo "=================================="''',
         outlets=[mindlamp_data_asset],
     )
 
+    trigger_push_data = TriggerDagRunOperator(
+        task_id="trigger_push_data",
+        task_display_name="Trigger Push Data",
+        trigger_dag_id="lochness_push_data",
+        conf={
+            "project_id": "{{ params.project_id or '' }}",
+            "site_id": "{{ params.site_id or '' }}",
+        },
+        wait_for_completion=True,
+        poke_interval=60,
+        allowed_states=["success"],
+        failed_states=["failed"],
+        retries=0,  # a retry would trigger a second push run
+        outlets=[mindlamp_data_pushed_asset],
+    )
+
     # pylint: disable=pointless-statement
-    print_info >> mindlamp_pull_data  # type: ignore[reportUnusedExpression]
+    print_info >> mindlamp_pull_data >> trigger_push_data  # type: ignore[reportUnusedExpression]
