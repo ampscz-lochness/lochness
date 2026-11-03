@@ -24,10 +24,13 @@ except ValueError:
 
 import argparse
 import logging
+import os
+import threading
+import time
 from collections import Counter, defaultdict
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import pytz
 from rich.logging import RichHandler
@@ -47,6 +50,41 @@ logargs: Dict[str, Any] = {
     "handlers": [RichHandler(rich_tracebacks=True)],
 }
 logging.basicConfig(**logargs)
+
+# How often the main thread wakes up to check on in-flight downloads.
+STALL_POLL_INTERVAL_SECONDS = 60
+DEFAULT_STALL_TIMEOUT_MINUTES = 30
+
+TaskKey = Tuple[str, datetime]
+
+
+class MindLAMPPullStalledError(RuntimeError):
+    """
+    Raised when no subject-date download completes within the stall timeout.
+
+    The worker threads are usually blocked in an uninterruptible filesystem
+    call (e.g. a hung CIFS/NFS mount) and cannot be cancelled or joined, so
+    the caller must exit the process without waiting for them (os._exit).
+    """
+
+
+def _run_tracked(
+    in_flight: Dict[TaskKey, float],
+    lock: threading.Lock,
+    key: TaskKey,
+    fn: Callable[..., List[Any]],
+    **kwargs: Any,
+) -> List[Any]:
+    """
+    Run fn(**kwargs), recording its start time in `in_flight` while it runs.
+    """
+    with lock:
+        in_flight[key] = time.monotonic()
+    try:
+        return fn(**kwargs)
+    finally:
+        with lock:
+            in_flight.pop(key, None)
 
 
 def log_event(
@@ -112,13 +150,19 @@ def pull_all_data(
     site_id: Optional[str] = None,
     subject_ids: Optional[List[str]] = None,
     jobs: int = 1,
+    stall_timeout_minutes: float = DEFAULT_STALL_TIMEOUT_MINUTES,
 ):
     """
     Main function to pull data for all active MindLAMP data sources and subjects.
 
     If subject_ids is provided, only those subjects are pulled.
     Up to `jobs` subject-dates are downloaded in parallel.
+
+    Any subject-date still running after `stall_timeout_minutes` is logged as an
+    error. If no subject-date completes for `stall_timeout_minutes`, the pull is
+    aborted with MindLAMPPullStalledError.
     """
+    stall_timeout_seconds = stall_timeout_minutes * 60
     log_event(
         config_file=config_file,
         log_level="INFO",
@@ -263,9 +307,25 @@ def pull_all_data(
         )
         pulls_per_subject: Dict[str, int] = defaultdict(int)
 
-        with ThreadPoolExecutor(max_workers=jobs) as executor:
-            futures: Dict[Future[List[Any]], Tuple[str, datetime]] = {
+        # Start times of the subject-dates currently being downloaded, so the
+        # main thread can tell when a worker is stuck (e.g. on a hung mount).
+        in_flight: Dict[TaskKey, float] = {}
+        in_flight_lock = threading.Lock()
+        reported_slow: Set[TaskKey] = set()
+        task_data_roots: Dict[TaskKey, Path] = {
+            (task[0], task[3]): task[2] for task in download_tasks
+        }
+
+        # Not a `with` block: shutdown(wait=True) would block forever if a
+        # worker is stuck in an uninterruptible filesystem call.
+        executor = ThreadPoolExecutor(max_workers=jobs)
+        try:
+            futures: Dict[Future[List[Any]], TaskKey] = {
                 executor.submit(
+                    _run_tracked,
+                    in_flight,
+                    in_flight_lock,
+                    (subject_id, date_dt),
                     mindlamp_utils.fetch_subject_data_for_date,
                     mindlamp_data_source=mindlamp_data_source,
                     subject_id=subject_id,
@@ -282,57 +342,148 @@ def pull_all_data(
                 ) in download_tasks
             }
 
-            for future in as_completed(futures):
-                subject_id, date_dt = futures[future]
-                try:
-                    num_new_pulls = len(future.result())
-                    pulls_per_subject[subject_id] += num_new_pulls
-                    total_data_pulls += num_new_pulls
-                except Exception as e:  # pylint: disable=broad-except
-                    logger.error(
-                        f"Failed to fetch data for subject {subject_id} on "
-                        f"{date_dt.date()}: {e}"
+            pending: Set[Future[List[Any]]] = set(futures)
+            last_progress = time.monotonic()
+            while pending:
+                done, pending = wait(
+                    pending,
+                    timeout=min(STALL_POLL_INTERVAL_SECONDS, stall_timeout_seconds),
+                    return_when=FIRST_COMPLETED,
+                )
+                if done:
+                    last_progress = time.monotonic()
+
+                for future in done:
+                    subject_id, date_dt = futures[future]
+                    try:
+                        num_new_pulls = len(future.result())
+                        pulls_per_subject[subject_id] += num_new_pulls
+                        total_data_pulls += num_new_pulls
+                    except Exception as e:  # pylint: disable=broad-except
+                        logger.error(
+                            f"Failed to fetch data for subject {subject_id} on "
+                            f"{date_dt.date()}: {e}"
+                        )
+                        log_event(
+                            config_file=config_file,
+                            log_level="ERROR",
+                            event="mindlamp_data_pull_date_failed",
+                            message=(
+                                f"Failed to fetch data for subject {subject_id} on "
+                                f"{date_dt.date()}: {e}"
+                            ),
+                            project_id=mindlamp_data_source.project_id,
+                            site_id=mindlamp_data_source.site_id,
+                            data_source_name=mindlamp_data_source.data_source_name,
+                            subject_id=subject_id,
+                            extra={"data_date_utc": str(date_dt.date())},
+                        )
+
+                    remaining_dates_per_subject[subject_id] -= 1
+                    if remaining_dates_per_subject[subject_id] > 0:
+                        continue
+
+                    num_pulls = pulls_per_subject[subject_id]
+                    if num_pulls:
+                        logger.info(
+                            f"Fetched {num_pulls} data pulls for subject {subject_id} "
+                            f"in project {mindlamp_data_source.project_id} and site "
+                            f"{mindlamp_data_source.site_id}."
+                        )
+                        log_event(
+                            config_file=config_file,
+                            log_level="INFO",
+                            event="mindlamp_data_pull_subject_complete",
+                            message=(
+                                f"Fetched {num_pulls} data pulls for subject "
+                                f"{subject_id} in project {mindlamp_data_source.project_id} "
+                                f"and site {mindlamp_data_source.site_id}."
+                            ),
+                            project_id=mindlamp_data_source.project_id,
+                            site_id=mindlamp_data_source.site_id,
+                            data_source_name=mindlamp_data_source.data_source_name,
+                            subject_id=subject_id,
+                        )
+
+                if not pending:
+                    break
+
+                now = time.monotonic()
+                with in_flight_lock:
+                    running = dict(in_flight)
+
+                # Report each subject-date once when it exceeds the timeout.
+                for key, started in running.items():
+                    if key in reported_slow or now - started < stall_timeout_seconds:
+                        continue
+                    reported_slow.add(key)
+                    slow_subject_id, slow_date_dt = key
+                    message = (
+                        f"Download for subject {slow_subject_id} on "
+                        f"{slow_date_dt.date()} has been running for "
+                        f"{(now - started) / 60:.0f} minutes "
+                        f"(data root: {task_data_roots[key]}). The worker may be "
+                        "blocked on the filesystem."
                     )
+                    logger.error(message)
                     log_event(
                         config_file=config_file,
                         log_level="ERROR",
-                        event="mindlamp_data_pull_date_failed",
-                        message=(
-                            f"Failed to fetch data for subject {subject_id} on "
-                            f"{date_dt.date()}: {e}"
-                        ),
+                        event="mindlamp_data_pull_date_slow",
+                        message=message,
                         project_id=mindlamp_data_source.project_id,
                         site_id=mindlamp_data_source.site_id,
                         data_source_name=mindlamp_data_source.data_source_name,
-                        subject_id=subject_id,
-                        extra={"data_date_utc": str(date_dt.date())},
+                        subject_id=slow_subject_id,
+                        extra={
+                            "data_date_utc": str(slow_date_dt.date()),
+                            "running_seconds": round(now - started),
+                        },
                     )
 
-                remaining_dates_per_subject[subject_id] -= 1
-                if remaining_dates_per_subject[subject_id] > 0:
+                stalled_seconds = now - last_progress
+                if stalled_seconds < stall_timeout_seconds:
                     continue
 
-                num_pulls = pulls_per_subject[subject_id]
-                if num_pulls:
-                    logger.info(
-                        f"Fetched {num_pulls} data pulls for subject {subject_id} "
-                        f"in project {mindlamp_data_source.project_id} and site "
-                        f"{mindlamp_data_source.site_id}."
+                stuck_descriptions = [
+                    f"{stuck_subject_id} {stuck_date_dt.date()} "
+                    f"({(now - started) / 60:.0f} min, "
+                    f"{task_data_roots[(stuck_subject_id, stuck_date_dt)]})"
+                    for (stuck_subject_id, stuck_date_dt), started in sorted(
+                        running.items(), key=lambda item: item[1]
                     )
-                    log_event(
-                        config_file=config_file,
-                        log_level="INFO",
-                        event="mindlamp_data_pull_subject_complete",
-                        message=(
-                            f"Fetched {num_pulls} data pulls for subject "
-                            f"{subject_id} in project {mindlamp_data_source.project_id} "
-                            f"and site {mindlamp_data_source.site_id}."
-                        ),
-                        project_id=mindlamp_data_source.project_id,
-                        site_id=mindlamp_data_source.site_id,
-                        data_source_name=mindlamp_data_source.data_source_name,
-                        subject_id=subject_id,
-                    )
+                ]
+                message = (
+                    "MindLAMP data pull stalled: no subject-date download "
+                    f"completed in {stalled_seconds / 60:.0f} minutes for "
+                    f"{mindlamp_data_source.data_source_name}. "
+                    f"{len(running)} download(s) in flight: "
+                    f"{'; '.join(stuck_descriptions) or 'none'}. "
+                    f"{len(pending) - len(running)} subject-date(s) not started. "
+                    "Workers are likely blocked on the output filesystem "
+                    "(look for D-state threads with `ps -eLo pid,tid,stat,comm`). "
+                    "Aborting."
+                )
+                logger.error(message)
+                log_event(
+                    config_file=config_file,
+                    log_level="ERROR",
+                    event="mindlamp_data_pull_stalled",
+                    message=message,
+                    project_id=mindlamp_data_source.project_id,
+                    site_id=mindlamp_data_source.site_id,
+                    data_source_name=mindlamp_data_source.data_source_name,
+                    extra={
+                        "stalled_seconds": round(stalled_seconds),
+                        "in_flight_count": len(running),
+                        "pending_count": len(pending),
+                    },
+                )
+                raise MindLAMPPullStalledError(message)
+        except BaseException:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        executor.shutdown(wait=True)
 
     logger.info(f"Recorded {total_data_pulls} DataPulls in this run.")
     log_event(
@@ -391,6 +542,16 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="Number of subject-dates to download in parallel (default: 1)",
+    )
+    parser.add_argument(
+        "--stall-timeout",
+        type=float,
+        default=DEFAULT_STALL_TIMEOUT_MINUTES,
+        help=(
+            "Minutes a subject-date download may run before it is logged as an "
+            "error; if no download completes for this long, the pull aborts "
+            f"(default: {DEFAULT_STALL_TIMEOUT_MINUTES})"
+        ),
     )
     parser.add_argument(
         "-d",
@@ -460,6 +621,10 @@ if __name__ == "__main__":
         logger.error(f"--jobs must be at least 1, got {args.jobs}.")
         sys.exit(1)
 
+    if args.stall_timeout <= 0:
+        logger.error(f"--stall-timeout must be positive, got {args.stall_timeout}.")
+        sys.exit(1)
+
     subject_ids: Optional[List[str]] = None
     if args.subject_id:
         subject_ids = [
@@ -527,14 +692,21 @@ if __name__ == "__main__":
     else:
         logger.info("Skipping forced redownload (days to redownload is 0).")
 
-    pull_all_data(
-        config_file=config_file,
-        project_id=args.project_id,
-        site_id=args.site_id,
-        subject_ids=subject_ids,
-        jobs=args.jobs,
-        start_date=start_date,
-        end_date=end_date,
-        force_start_date=force_start_date,
-        force_end_date=force_end_date,
-    )
+    try:
+        pull_all_data(
+            config_file=config_file,
+            project_id=args.project_id,
+            site_id=args.site_id,
+            subject_ids=subject_ids,
+            jobs=args.jobs,
+            start_date=start_date,
+            end_date=end_date,
+            force_start_date=force_start_date,
+            force_end_date=force_end_date,
+            stall_timeout_minutes=args.stall_timeout,
+        )
+    except MindLAMPPullStalledError:
+        # Already logged. The stuck worker threads cannot be interrupted, and a
+        # normal exit would wait on them forever, so exit without joining them.
+        logging.shutdown()
+        os._exit(1)  # pylint: disable=protected-access
