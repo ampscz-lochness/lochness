@@ -371,6 +371,35 @@ class TestFetchWorkspaceData:
         assert list(tmp_path.rglob("*")) == []
         execute_queries.assert_not_called()
 
+    def test_load_terra_credentials_persists_rotated_b2c_refresh_token(self):
+        ds = make_terra_data_source()
+        keystore = KeyStore(
+            key_name="terra_prod",
+            key_value=json.dumps(
+                {"auth_mode": "terra_b2c", "refresh_token": "old-rt"}
+            ),
+            key_type="terra",
+            project_id="ProCAN",
+        )
+
+        with (
+            patch(f"{PULL_MOD}.KeyStore.retrieve_keystore", return_value=keystore),
+            patch(
+                f"{PULL_MOD}.config.get_encryption_passphrase",
+                return_value="secret-passphrase",
+            ),
+            patch(f"{PULL_MOD}.db.execute_queries") as exec_queries,
+        ):
+            creds = terra_pull._load_terra_credentials(ds, CONFIG_FILE)
+            assert isinstance(creds, terra_pull.terra_api.TerraB2CCredentials)
+            assert creds.on_refresh_token_rotated is not None
+            creds.on_refresh_token_rotated("new-rotated-rt")
+
+        exec_queries.assert_called_once()
+        sql_list = exec_queries.call_args.kwargs["queries"]
+        assert len(sql_list) == 1
+        assert "new-rotated-rt" in sql_list[0]
+
 
 class TestPullAllData:
     def test_pull_all_data_filters_sources_and_subjects(self):

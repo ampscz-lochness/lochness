@@ -12,7 +12,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
 import google.auth
@@ -37,6 +37,7 @@ DEFAULT_TERRA_B2C_TOKEN_URL = (
 )
 DEFAULT_TERRA_B2C_CLIENT_ID = "4aefc4ac-d5be-4440-ae9a-aefe4ceb098c"
 DEFAULT_TERRA_B2C_CALLBACK_PORT = 10444
+DEFAULT_TERRA_B2C_REMOTE_REDIRECT_URI = "https://services.terra.bio/pipelines/cli-auth"
 
 TERRA_OAUTH_SCOPES: Tuple[str, ...] = (
     "https://www.googleapis.com/auth/userinfo.profile",
@@ -69,6 +70,7 @@ class TerraB2CCredentials:
         sam_api_url: str = DEFAULT_TERRA_SAM_URL,
         access_token: Optional[str] = None,
         expires_in: Optional[int] = None,
+        on_refresh_token_rotated: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.refresh_token = refresh_token
         self.client_id = client_id
@@ -80,11 +82,22 @@ class TerraB2CCredentials:
             if access_token and expires_in
             else 0.0
         )
+        self.on_refresh_token_rotated = on_refresh_token_rotated
 
     @property
     def valid(self) -> bool:
         """Return True if a non-expired access token is currently cached."""
         return bool(self.token) and time.monotonic() < self._expires_at
+
+    def to_cred_dict(self) -> Dict[str, Any]:
+        """Serialize current B2C credential state for storing in KeyStore."""
+        return {
+            "auth_mode": "terra_b2c",
+            "client_id": self.client_id,
+            "token_url": self.token_url,
+            "sam_api_url": self.sam_api_url,
+            "refresh_token": self.refresh_token,
+        }
 
     def refresh(self, timeout: int = 60) -> None:
         """Exchange the stored B2C refresh token for a fresh Terra access token."""
@@ -113,8 +126,14 @@ class TerraB2CCredentials:
             raise RuntimeError("Terra B2C token refresh response did not include a token.")
 
         self.token = new_token
-        if payload.get("refresh_token"):
-            self.refresh_token = payload["refresh_token"]
+        rotated = payload.get("refresh_token")
+        if rotated and rotated != self.refresh_token:
+            self.refresh_token = rotated
+            if self.on_refresh_token_rotated is not None:
+                try:
+                    self.on_refresh_token_rotated(rotated)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Failed to persist rotated Terra B2C refresh token: {e}")
         expires_in = int(payload.get("expires_in", 3600))
         self._expires_at = time.monotonic() + max(expires_in - 60, 0)
 
@@ -153,6 +172,88 @@ class TerraB2CCredentials:
 
 
 TerraCredentials = Credentials | TerraB2CCredentials
+
+
+def headless_b2c_login(
+    client_id: str = DEFAULT_TERRA_B2C_CLIENT_ID,
+    authorize_url: str = DEFAULT_TERRA_B2C_AUTHORIZE_URL,
+    token_url: str = DEFAULT_TERRA_B2C_TOKEN_URL,
+    sam_api_url: str = DEFAULT_TERRA_SAM_URL,
+    redirect_uri: str = DEFAULT_TERRA_B2C_REMOTE_REDIRECT_URI,
+    code_input_fn: Callable[[str], str] = input,
+    timeout: int = 60,
+) -> Dict[str, Any]:
+    """
+    Headless (no-GUI) Terra Azure AD B2C login flow for remote servers,
+    analogous to SharePoint's MSAL device-code flow.
+
+    1. Prints an authorization URL that can be opened in any browser on another
+       machine (e.g. your laptop) to sign in with Microsoft.
+    2. After signing in, Terra redirects the browser to
+       ``https://services.terra.bio/pipelines/cli-auth`` which displays a
+       verification code.
+    3. Prompts for that code in the server terminal and exchanges it for a
+       long-lived ``refresh_token`` to store in Lochness ``KeyStore``.
+    """
+    scopes = f"offline_access openid email profile {client_id}"
+    query = urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": scopes,
+            "prompt": "login",
+            "brand": "scientificServices",
+        }
+    )
+    auth_url = f"{authorize_url}?{query}"
+    logger.info(
+        "Headless Terra sign-in: open the following URL in any browser on your "
+        f"laptop/desktop and sign in with Microsoft:\n\n{auth_url}\n"
+    )
+    print(
+        "\n=== Headless Terra Microsoft Sign-In ===\n"
+        "1. Open this URL in any browser (e.g. on your laptop):\n\n"
+        f"   {auth_url}\n\n"
+        "2. Click 'Sign in with Microsoft' and complete login.\n"
+        "3. Copy the verification code displayed in your browser and paste it below.\n"
+    )
+    auth_code = code_input_fn("Enter verification code from browser: ").strip()
+    if not auth_code:
+        raise RuntimeError("No verification code entered for headless Terra B2C login.")
+
+    basic_auth = base64.b64encode(f"{client_id}:".encode()).decode()
+    resp = requests.post(
+        token_url,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Authorization": f"Basic {basic_auth}",
+        },
+        data={
+            "grant_type": "authorization_code",
+            "code": auth_code,
+            "redirect_uri": redirect_uri,
+        },
+        timeout=timeout,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Terra B2C authorization code exchange failed (HTTP {resp.status_code}): "
+            f"{resp.text}"
+        )
+
+    payload = resp.json()
+    refresh_token = payload.get("refresh_token")
+    if not refresh_token:
+        raise RuntimeError("Terra B2C token response did not include a refresh_token.")
+
+    return {
+        "auth_mode": "terra_b2c",
+        "client_id": client_id,
+        "token_url": token_url,
+        "sam_api_url": sam_api_url,
+        "refresh_token": refresh_token,
+    }
 
 
 def interactive_b2c_login(
@@ -308,6 +409,28 @@ def get_credentials(
         )
 
     if cred_dict is None or cred_dict.get("auth_mode") == "adc":
+        env_refresh_token = (
+            os.environ.get("TERRA_REFRESH_TOKEN")
+            if cred_dict is None
+            else None
+        )
+        if env_refresh_token:
+            logger.info(
+                "Authenticating to Terra using TERRA_REFRESH_TOKEN environment variable."
+            )
+            return TerraB2CCredentials(
+                refresh_token=env_refresh_token,
+                client_id=os.environ.get(
+                    "TERRA_CLIENT_ID", DEFAULT_TERRA_B2C_CLIENT_ID
+                ),
+                token_url=os.environ.get(
+                    "TERRA_TOKEN_URL", DEFAULT_TERRA_B2C_TOKEN_URL
+                ),
+                sam_api_url=os.environ.get(
+                    "TERRA_SAM_API_URL", DEFAULT_TERRA_SAM_URL
+                ),
+            )
+
         logger.info("Authenticating to Terra using Google Application Default Credentials.")
         try:
             credentials, _ = google.auth.default(scopes=scope_list)

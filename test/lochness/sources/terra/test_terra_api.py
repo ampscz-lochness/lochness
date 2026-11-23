@@ -82,7 +82,8 @@ class TestAuthentication:
         with pytest.raises(RuntimeError, match="missing fields"):
             terra_api.get_credentials({"client_email": "only@email.iam"})
 
-    def test_get_credentials_adc_fallback_when_none(self):
+    def test_get_credentials_adc_fallback_when_none(self, monkeypatch):
+        monkeypatch.delenv("TERRA_REFRESH_TOKEN", raising=False)
         fake_creds = MagicMock()
         with patch(
             "lochness.sources.terra.api.google.auth.default",
@@ -92,6 +93,12 @@ class TestAuthentication:
 
         assert creds is fake_creds
         adc.assert_called_once_with(scopes=list(terra_api.TERRA_OAUTH_SCOPES))
+
+    def test_get_credentials_uses_terra_refresh_token_env_when_none(self, monkeypatch):
+        monkeypatch.setenv("TERRA_REFRESH_TOKEN", "env-refresh-token-999")
+        creds = terra_api.get_credentials(None)
+        assert isinstance(creds, terra_api.TerraB2CCredentials)
+        assert creds.refresh_token == "env-refresh-token-999"
 
     def test_get_credentials_adc_explicit_mode(self):
         fake_creds = MagicMock()
@@ -175,6 +182,47 @@ class TestAuthentication:
     def test_get_credentials_terra_b2c_missing_refresh_token_raises(self):
         with pytest.raises(RuntimeError, match="missing 'refresh_token'"):
             terra_api.get_credentials({"auth_mode": "terra_b2c"})
+
+    def test_terra_b2c_refresh_invokes_on_refresh_token_rotated_callback(self):
+        rotated_tokens = []
+        creds = terra_api.TerraB2CCredentials(
+            refresh_token="rt-1",
+            on_refresh_token_rotated=rotated_tokens.append,
+        )
+        token_resp = MagicMock(status_code=200)
+        token_resp.json.return_value = {
+            "access_token": "tok-2",
+            "refresh_token": "rt-2",
+            "expires_in": 3600,
+        }
+        with patch("lochness.sources.terra.api.requests.post", return_value=token_resp):
+            creds.refresh()
+
+        assert creds.refresh_token == "rt-2"
+        assert rotated_tokens == ["rt-2"]
+
+    def test_headless_b2c_login_exchanges_pasted_code_for_refresh_token(self):
+        token_resp = MagicMock(status_code=200)
+        token_resp.json.return_value = {
+            "access_token": "tok-1",
+            "refresh_token": "rt-headless-123",
+            "expires_in": 3600,
+        }
+        with patch(
+            "lochness.sources.terra.api.requests.post", return_value=token_resp
+        ) as post:
+            cred_dict = terra_api.headless_b2c_login(
+                code_input_fn=lambda _prompt: "  pasted-auth-code-xyz  "
+            )
+
+        assert cred_dict["auth_mode"] == "terra_b2c"
+        assert cred_dict["refresh_token"] == "rt-headless-123"
+        post.assert_called_once()
+        assert post.call_args.kwargs["data"] == {
+            "grant_type": "authorization_code",
+            "code": "pasted-auth-code-xyz",
+            "redirect_uri": terra_api.DEFAULT_TERRA_B2C_REMOTE_REDIRECT_URI,
+        }
 
     def test_get_gcs_credentials_passthrough_for_google_creds(self):
         fake_google_creds = MagicMock()

@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional
 
 from rich.logging import RichHandler
 
-from lochness.helpers import config, fs, logs, utils
+from lochness.helpers import config, db, fs, logs, utils
 from lochness.models.keystore import KeyStore
 from lochness.models.subjects import Subject
 from lochness.sources.terra import api as terra_api
@@ -68,6 +68,7 @@ def _load_terra_credentials(
     )
 
     cred_dict: Optional[Dict[str, Any]] = None
+    keystore: Optional[KeyStore] = None
     if metadata.keystore_name:
         keystore = KeyStore.retrieve_keystore(
             metadata.keystore_name,
@@ -86,7 +87,36 @@ def _load_terra_credentials(
                 f"does not contain valid JSON: {e}"
             ) from e
 
-    return terra_api.get_credentials(cred_dict=cred_dict)
+    credentials = terra_api.get_credentials(cred_dict=cred_dict)
+
+    if (
+        isinstance(credentials, terra_api.TerraB2CCredentials)
+        and keystore is not None
+    ):
+        def _persist_rotated_refresh_token(new_refresh_token: str) -> None:
+            updated_dict = credentials.to_cred_dict()
+            updated_dict["refresh_token"] = new_refresh_token
+            updated_keystore = KeyStore(
+                key_name=keystore.key_name,
+                key_value=json.dumps(updated_dict),
+                key_type=keystore.key_type or "terra",
+                project_id=project_id,
+                key_metadata=keystore.key_metadata or {},
+            )
+            passphrase = config.get_encryption_passphrase(config_file)
+            db.execute_queries(
+                config_file=config_file,
+                queries=[updated_keystore.to_sql_query(passphrase)],
+                show_commands=False,
+            )
+            logger.debug(
+                f"Persisted rotated Terra B2C refresh token to KeyStore "
+                f"'{keystore.key_name}' for {identifier}."
+            )
+
+        credentials.on_refresh_token_rotated = _persist_rotated_refresh_token
+
+    return credentials
 
 
 def _pull_subject_table_and_gcs_files(

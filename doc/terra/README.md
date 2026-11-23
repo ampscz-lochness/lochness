@@ -10,17 +10,25 @@ Lochness supports pulling data from **Terra on Google Cloud Platform** (`app.ter
 
 Lochness supports **both** Terra authentication methods:
 
-### Option A: Terra Microsoft / Azure AD B2C Login (No Google Account Needed)
-If you sign into `app.terra.bio` using **Sign in with Microsoft** (institutional Entra ID / Azure AD B2C):
-- Authenticate once via Terra's B2C OAuth flow to store a `refresh_token` in Lochness `KeyStore`.
-- At runtime, Lochness refreshes the Terra B2C Bearer token headlessly for Terra REST API calls and automatically exchanges it via Terra Sam (`POST /api/google/v1/user/petServiceAccount/token`) for a temporary GCS token to read workspace buckets.
+### Option A: Terra Microsoft / Azure AD B2C Login (`TERRA_REFRESH_TOKEN` / `config.ini`)
+If you sign into `app.terra.bio` using **Sign in with Microsoft** (institutional Entra ID / Azure AD B2C), authentication on a **headless (no-GUI) server** works just like SharePoint:
 
-```bash
-python test/lochness/sources/terra/insert_terra_credentials.py \
-  --key-name terra_prod \
-  --project-id ProCAN \
-  --microsoft-login
-```
+1. **Insert credentials into `KeyStore` on the headless server** (via `TERRA_REFRESH_TOKEN` or `config.ini` `[terra]`):
+   ```bash
+   export TERRA_REFRESH_TOKEN="<your_terra_b2c_refresh_token>"
+   python test/lochness/sources/terra/insert_terra_credentials.py \
+     --key-name terra_prod \
+     --project-id ProCAN
+   ```
+   Or set `refresh_token` under `[terra]` in `config.ini`:
+   ```ini
+   [terra]
+   refresh_token=your_terra_b2c_refresh_token
+   ```
+   *(To generate a fresh `TERRA_REFRESH_TOKEN` on your laptop at any time, run `python test/lochness/sources/terra/insert_terra_credentials.py --get-refresh-token`.)*
+
+2. **100% non-interactive runtime in Airflow / Cron**:
+   - During `pull_data.py`, Lochness reads the encrypted `refresh_token` from PostgreSQL `key_store`, exchanges it via HTTPS POST for a fresh Terra Bearer token, **automatically persists any rotated `refresh_token` back into PostgreSQL `key_store`**, and exchanges the Terra token via Terra Sam (`POST /api/google/v1/user/petServiceAccount/token`) for a temporary GCS token. **No browser or GUI is ever used on the server.**
 
 ### Option B: Google Cloud Service Account JSON Key
 For non-personal automation pipelines:
