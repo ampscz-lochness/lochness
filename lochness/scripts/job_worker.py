@@ -16,6 +16,7 @@ from lochness.sources.redcap.tasks.pull_data import pull_all_data as redcap_pull
 from lochness.sources.mindlamp.tasks.pull_data import pull_all_data as mindlamp_pull_all_data
 from lochness.sources.cantab.tasks.pull_data import pull_all_data as cantab_pull_all_data
 from lochness.sources.sharepoint.tasks.pull_data import pull_all_data as sharepoint_pull_all_data
+from lochness.sources.terra.tasks.pull_data import pull_all_data as terra_pull_all_data
 from lochness.sources.xnat.tasks.pull_data import pull_all_data as xnat_pull_all_data
 from lochness.tasks.push_data import push_all_data
 
@@ -67,6 +68,8 @@ def run_job(job: Job):
                     data_source_type = 'cantab'
                 elif 'sharepoint' in name:
                     data_source_type = 'sharepoint'
+                elif 'terra' in name:
+                    data_source_type = 'terra'
                 elif 'xnat' in name:
                     data_source_type = 'xnat'
             if data_source_type == 'redcap':
@@ -77,6 +80,8 @@ def run_job(job: Job):
                 cantab_pull_all_data(CONFIG_FILE, project_id=job.project_id, site_id=job.site_id, push_to_sink=True)
             elif data_source_type == 'sharepoint':
                 sharepoint_pull_all_data(CONFIG_FILE, project_id=job.project_id, site_id=job.site_id, push_to_sink=True)
+            elif data_source_type == 'terra':
+                terra_pull_all_data(CONFIG_FILE, project_id=job.project_id, site_id=job.site_id, push_to_sink=True)
             elif data_source_type == 'xnat':
                 xnat_pull_all_data(CONFIG_FILE, project_id=job.project_id, site_id=job.site_id, push_to_sink=True)
             else:
@@ -101,6 +106,8 @@ def run_job(job: Job):
                     data_source_type = 'cantab'
                 elif 'sharepoint' in name:
                     data_source_type = 'sharepoint'
+                elif 'terra' in name:
+                    data_source_type = 'terra'
                 elif 'xnat' in name:
                     data_source_type = 'xnat'
             if data_source_type == 'redcap':

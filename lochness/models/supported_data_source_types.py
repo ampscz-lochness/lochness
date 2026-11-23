@@ -93,6 +93,30 @@ SUPPORTED_DATA_SOURCE_TYPES: List[SupportedDataSourceTypes] = [
             "form_name": "Name of the Teams Form",
         },
     ),
+    SupportedDataSourceTypes(
+        data_source_type="terra",
+        data_source_metadata_dict={
+            "keystore_name": "Name of the keystore entry containing GCP Service Account JSON (optional for ADC)",
+            "workspace_namespace": "Terra billing project / workspace namespace",
+            "workspace_name": "Terra workspace name",
+            "modality": "PHOENIX modality subdirectory (default: terra)",
+            "api_url": "Terra/FireCloud API base URL (default: https://api.firecloud.org)",
+            "pull_tables": "Whether to pull workspace entity data tables (default: true)",
+            "pull_table_gcs_files": "Whether to download gs:// files referenced in entity tables (default: true)",
+            "pull_bucket_files": "Whether to sync files directly from the workspace GCS bucket (default: false)",
+            "entity_types": "Optional list of Terra entity table names to pull (default: all)",
+            "table_format": "Output format for entity tables: json, tsv, or csv (default: json)",
+            "subject_id_column": "Entity field or attribute matching subject ID (default: name)",
+            "subject_id_metadata_key": "Optional key in subject_metadata for mapping Lochness subject to Terra ID",
+            "gcs_uri_columns": "Optional list of table columns containing gs:// URIs (default: auto-detect)",
+            "bucket_name": "Optional GCS bucket name override (default: workspace bucketName)",
+            "bucket_prefix": "Optional GCS bucket prefix for direct bucket sync",
+            "bucket_subject_folder_template": "Subfolder pattern under bucket_prefix (default: {subject_id})",
+            "include_patterns": "Optional list of glob patterns for GCS files to include",
+            "exclude_patterns": "Optional list of glob patterns for GCS files to exclude",
+            "billing_project": "Optional GCP billing project for Requester Pays GCS buckets",
+        },
+    ),
 ]
 
 
