@@ -349,9 +349,7 @@ def fetch_workspace_data_for_subjects(
     headers = terra_api.get_auth_headers(credentials)
 
     needs_gcs = metadata.pull_table_gcs_files or metadata.pull_bucket_files
-    needs_workspace_metadata = (
-        metadata.pull_bucket_files and not metadata.bucket_name
-    ) or (needs_gcs and not metadata.billing_project)
+    needs_workspace_metadata = metadata.pull_bucket_files and not metadata.bucket_name
     workspace_info: Optional[Dict[str, Any]] = None
     if needs_workspace_metadata:
         workspace_info = terra_api.get_workspace(
@@ -361,17 +359,15 @@ def fetch_workspace_data_for_subjects(
             api_url=metadata.api_url,
         )
 
-    workspace_google_project = (
-        workspace_info.get("workspace", {}).get("googleProject")
-        if workspace_info
-        else None
-    )
-    user_project = metadata.billing_project or workspace_google_project
+    # Only pass user_project when explicitly configured for Requester Pays buckets;
+    # passing a workspace's googleProject on a READER workspace causes GCS 403 errors.
+    user_project = metadata.billing_project
 
     storage_client: Any = None
     if needs_gcs:
+        gcs_credentials = terra_api.get_gcs_credentials(credentials)
         storage_client = terra_api.create_storage_client(
-            credentials=credentials,
+            credentials=gcs_credentials,
             project=user_project,
         )
 

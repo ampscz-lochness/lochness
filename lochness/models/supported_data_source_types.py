@@ -96,7 +96,7 @@ SUPPORTED_DATA_SOURCE_TYPES: List[SupportedDataSourceTypes] = [
     SupportedDataSourceTypes(
         data_source_type="terra",
         data_source_metadata_dict={
-            "keystore_name": "Name of the keystore entry containing GCP Service Account JSON (optional for ADC)",
+            "keystore_name": "Name of the keystore entry containing Terra B2C (Microsoft) refresh token JSON or GCP Service Account JSON (optional for ADC)",
             "workspace_namespace": "Terra billing project / workspace namespace",
             "workspace_name": "Terra workspace name",
             "modality": "PHOENIX modality subdirectory (default: terra)",

@@ -3,8 +3,14 @@ Module for authenticating and interacting with Terra (app.terra.bio) via
 the Terra/FireCloud REST API and Google Cloud Storage (GCS).
 """
 
+import base64
 import logging
 import os
+import secrets
+import time
+import urllib.parse
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
@@ -15,10 +21,22 @@ from google.auth.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.cloud import storage
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as GoogleTokenCredentials
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TERRA_API_URL = "https://api.firecloud.org"
+DEFAULT_TERRA_SAM_URL = "https://sam.dsde-prod.broadinstitute.org"
+DEFAULT_TERRA_B2C_AUTHORIZE_URL = (
+    "https://terraprodb2c.b2clogin.com/terraprodb2c.onmicrosoft.com/"
+    "b2c_1a_signup_signin_tsps_prod/oauth2/v2.0/authorize"
+)
+DEFAULT_TERRA_B2C_TOKEN_URL = (
+    "https://terraprodb2c.b2clogin.com/terraprodb2c.onmicrosoft.com/"
+    "b2c_1a_signup_signin_tsps_prod/oauth2/v2.0/token"
+)
+DEFAULT_TERRA_B2C_CLIENT_ID = "4aefc4ac-d5be-4440-ae9a-aefe4ceb098c"
+DEFAULT_TERRA_B2C_CALLBACK_PORT = 10444
 
 TERRA_OAUTH_SCOPES: Tuple[str, ...] = (
     "https://www.googleapis.com/auth/userinfo.profile",
@@ -26,34 +44,268 @@ TERRA_OAUTH_SCOPES: Tuple[str, ...] = (
     "https://www.googleapis.com/auth/devstorage.read_only",
 )
 
+GCS_READ_ONLY_SCOPES: Tuple[str, ...] = (
+    "https://www.googleapis.com/auth/devstorage.read_only",
+)
+
+
+class TerraB2CCredentials:
+    """
+    OAuth2 credentials backed by Terra's Azure AD B2C refresh token
+    (used for Microsoft / institutional Terra accounts).
+
+    Supports:
+    - Refreshing the Terra B2C Bearer token for Terra/FireCloud REST API calls.
+    - Exchanging the Terra B2C token via Terra Sam
+      (``POST /api/google/v1/user/petServiceAccount/token``) for a short-lived
+      Google Cloud Storage access token without requiring a Google account.
+    """
+
+    def __init__(
+        self,
+        refresh_token: str,
+        client_id: str = DEFAULT_TERRA_B2C_CLIENT_ID,
+        token_url: str = DEFAULT_TERRA_B2C_TOKEN_URL,
+        sam_api_url: str = DEFAULT_TERRA_SAM_URL,
+        access_token: Optional[str] = None,
+        expires_in: Optional[int] = None,
+    ) -> None:
+        self.refresh_token = refresh_token
+        self.client_id = client_id
+        self.token_url = token_url
+        self.sam_api_url = sam_api_url.rstrip("/")
+        self.token: Optional[str] = access_token
+        self._expires_at: float = (
+            time.monotonic() + max(int(expires_in) - 60, 0)
+            if access_token and expires_in
+            else 0.0
+        )
+
+    @property
+    def valid(self) -> bool:
+        """Return True if a non-expired access token is currently cached."""
+        return bool(self.token) and time.monotonic() < self._expires_at
+
+    def refresh(self, timeout: int = 60) -> None:
+        """Exchange the stored B2C refresh token for a fresh Terra access token."""
+        basic_auth = base64.b64encode(f"{self.client_id}:".encode()).decode()
+        response = requests.post(
+            self.token_url,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": f"Basic {basic_auth}",
+            },
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": self.refresh_token,
+            },
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Failed to refresh Terra B2C token (HTTP {response.status_code}): "
+                f"{response.text}"
+            )
+
+        payload = response.json()
+        new_token = payload.get("access_token") or payload.get("id_token")
+        if not new_token:
+            raise RuntimeError("Terra B2C token refresh response did not include a token.")
+
+        self.token = new_token
+        if payload.get("refresh_token"):
+            self.refresh_token = payload["refresh_token"]
+        expires_in = int(payload.get("expires_in", 3600))
+        self._expires_at = time.monotonic() + max(expires_in - 60, 0)
+
+    def get_gcs_access_token(
+        self,
+        scopes: Sequence[str] = GCS_READ_ONLY_SCOPES,
+        timeout: int = 60,
+    ) -> str:
+        """
+        Exchange the Terra B2C token via Terra Sam for a temporary Google OAuth2
+        access token belonging to the user's Terra Pet Service Account.
+        """
+        if not self.valid:
+            self.refresh(timeout=timeout)
+
+        url = f"{self.sam_api_url}/api/google/v1/user/petServiceAccount/token"
+        response = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json",
+            },
+            json=list(scopes),
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Failed to exchange Terra B2C token for Sam pet service account GCS "
+                f"token (HTTP {response.status_code}): {response.text}"
+            )
+
+        pet_token = response.json()
+        if not isinstance(pet_token, str) or not pet_token:
+            raise RuntimeError("Terra Sam returned an invalid pet service account token.")
+        return pet_token
+
+
+TerraCredentials = Credentials | TerraB2CCredentials
+
+
+def interactive_b2c_login(
+    client_id: str = DEFAULT_TERRA_B2C_CLIENT_ID,
+    authorize_url: str = DEFAULT_TERRA_B2C_AUTHORIZE_URL,
+    token_url: str = DEFAULT_TERRA_B2C_TOKEN_URL,
+    sam_api_url: str = DEFAULT_TERRA_SAM_URL,
+    port: int = DEFAULT_TERRA_B2C_CALLBACK_PORT,
+    timeout: int = 60,
+) -> Dict[str, Any]:
+    """
+    Perform interactive browser OAuth2 login against Terra Azure AD B2C
+    (supporting Microsoft / institutional accounts) and return a KeyStore-ready
+    credential dictionary containing ``refresh_token``.
+    """
+    redirect_uri = f"http://localhost:{port}"
+    scopes = f"offline_access openid email profile {client_id}"
+    state = secrets.token_urlsafe(24)
+    result_box: Dict[str, Optional[str]] = {"code": None, "error": None}
+
+    class _CallbackHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            if "error" in params:
+                result_box["error"] = params.get("error_description", params["error"])[0]
+                self.send_response(400)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(b"<h3>Terra login failed. You can close this tab.</h3>")
+                return
+            if "code" in params:
+                if params.get("state", [None])[0] != state:
+                    result_box["error"] = "OAuth state mismatch"
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                result_box["code"] = params["code"][0]
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(
+                    b"<h3>Terra sign-in succeeded! You can close this tab.</h3>"
+                )
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: Any) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", port), _CallbackHandler)
+    query = urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": scopes,
+            "state": state,
+            "prompt": "login",
+        }
+    )
+    auth_url = f"{authorize_url}?{query}"
+    logger.info("Opening Terra B2C sign-in page in your browser...")
+    webbrowser.open(auth_url)
+
+    try:
+        while result_box["code"] is None and result_box["error"] is None:
+            server.handle_request()
+    finally:
+        server.server_close()
+
+    if result_box["error"]:
+        raise RuntimeError(f"Terra B2C login failed: {result_box['error']}")
+
+    basic_auth = base64.b64encode(f"{client_id}:".encode()).decode()
+    resp = requests.post(
+        token_url,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Authorization": f"Basic {basic_auth}",
+        },
+        data={
+            "grant_type": "authorization_code",
+            "code": result_box["code"],
+            "redirect_uri": redirect_uri,
+        },
+        timeout=timeout,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Terra B2C authorization code exchange failed (HTTP {resp.status_code}): "
+            f"{resp.text}"
+        )
+
+    payload = resp.json()
+    refresh_token = payload.get("refresh_token")
+    if not refresh_token:
+        raise RuntimeError("Terra B2C token response did not include a refresh_token.")
+
+    return {
+        "auth_mode": "terra_b2c",
+        "client_id": client_id,
+        "token_url": token_url,
+        "sam_api_url": sam_api_url,
+        "refresh_token": refresh_token,
+    }
+
 
 def get_credentials(
     cred_dict: Optional[Dict[str, Any]] = None,
     scopes: Sequence[str] = TERRA_OAUTH_SCOPES,
-) -> Credentials:
+) -> TerraCredentials:
     """
-    Build Google OAuth2 credentials for Terra API and GCS access.
+    Build credentials for Terra REST API and GCS access.
 
     Supported credential inputs:
-    1. ``None`` or ``{"auth_mode": "adc"}``: Uses Google Application Default
+    1. ``{"auth_mode": "terra_b2c", "refresh_token": "..."}``: Terra Azure AD B2C
+       refresh token (Microsoft / institutional Terra login). Automatically
+       exchanges via Terra Sam for GCS Pet Service Account tokens when needed.
+    2. ``None`` or ``{"auth_mode": "adc"}``: Uses Google Application Default
        Credentials (ADC), e.g. from ``GOOGLE_APPLICATION_CREDENTIALS`` or a
        GCE/GKE metadata server.
-    2. ``{"service_account_file": "/path/to/sa.json"}``: Loads a Google Cloud
+    3. ``{"service_account_file": "/path/to/sa.json"}``: Loads a Google Cloud
        Service Account JSON key from disk.
-    3. A Service Account JSON dictionary (either directly or nested under
+    4. A Service Account JSON dictionary (either directly or nested under
        ``"service_account_info"``) stored in Lochness ``KeyStore``.
 
     Args:
         cred_dict (Optional[Dict[str, Any]]): Decrypted keystore dictionary or None.
-        scopes (Sequence[str]): OAuth2 scopes required for Terra and GCS.
+        scopes (Sequence[str]): OAuth2 scopes required for Google auth modes.
 
     Returns:
-        Credentials: Configured Google credentials object.
+        TerraCredentials: Configured ``TerraB2CCredentials`` or Google ``Credentials``.
 
     Raises:
         RuntimeError: If credentials cannot be loaded or validated.
     """
     scope_list = list(scopes)
+
+    if cred_dict is not None and cred_dict.get("auth_mode") == "terra_b2c":
+        refresh_token = cred_dict.get("refresh_token")
+        if not refresh_token:
+            raise RuntimeError(
+                "Invalid Terra B2C credentials; missing 'refresh_token'."
+            )
+        logger.info("Authenticating to Terra using Azure AD B2C (Microsoft) refresh token.")
+        return TerraB2CCredentials(
+            refresh_token=refresh_token,
+            client_id=cred_dict.get("client_id", DEFAULT_TERRA_B2C_CLIENT_ID),
+            token_url=cred_dict.get("token_url", DEFAULT_TERRA_B2C_TOKEN_URL),
+            sam_api_url=cred_dict.get("sam_api_url", DEFAULT_TERRA_SAM_URL),
+        )
 
     if cred_dict is None or cred_dict.get("auth_mode") == "adc":
         logger.info("Authenticating to Terra using Google Application Default Credentials.")
@@ -109,12 +361,15 @@ def get_credentials(
         ) from e
 
 
-def get_auth_headers(credentials: Credentials) -> Dict[str, str]:
+def get_auth_headers(credentials: TerraCredentials) -> Dict[str, str]:
     """
-    Return HTTP Authorization headers with a fresh Google OAuth2 Bearer token.
+    Return HTTP Authorization headers with a fresh Terra Bearer token.
+
+    Supports both ``TerraB2CCredentials`` (Microsoft / Azure AD B2C) and
+    Google ``Credentials`` (Service Account / ADC).
 
     Args:
-        credentials (Credentials): Google OAuth2 credentials.
+        credentials (TerraCredentials): Terra B2C or Google OAuth2 credentials.
 
     Returns:
         Dict[str, str]: Authorization header dictionary.
@@ -123,18 +378,35 @@ def get_auth_headers(credentials: Credentials) -> Dict[str, str]:
         RuntimeError: If refreshing the access token fails.
     """
     try:
-        if not credentials.valid or not credentials.token:
+        if isinstance(credentials, TerraB2CCredentials):
+            if not credentials.valid or not credentials.token:
+                credentials.refresh()
+        elif not credentials.valid or not credentials.token:
             credentials.refresh(GoogleAuthRequest())
     except Exception as e:
-        logger.error(f"Failed to refresh Google OAuth2 access token: {e}")
+        logger.error(f"Failed to refresh Terra OAuth2 access token: {e}")
         raise RuntimeError(
-            f"Failed to refresh Google OAuth2 access token: {e}"
+            f"Failed to refresh Terra OAuth2 access token: {e}"
         ) from e
 
     if not credentials.token:
-        raise RuntimeError("Google OAuth2 credentials did not yield an access token.")
+        raise RuntimeError("Terra credentials did not yield an access token.")
 
     return {"Authorization": f"Bearer {credentials.token}"}
+
+
+def get_gcs_credentials(
+    credentials: TerraCredentials,
+    scopes: Sequence[str] = GCS_READ_ONLY_SCOPES,
+) -> Credentials:
+    """
+    Obtain Google Cloud Storage credentials from either ``TerraB2CCredentials``
+    (via Terra Sam Pet Service Account token exchange) or Google ``Credentials``.
+    """
+    if isinstance(credentials, TerraB2CCredentials):
+        pet_token = credentials.get_gcs_access_token(scopes=scopes)
+        return GoogleTokenCredentials(token=pet_token)
+    return credentials
 
 
 def get_workspace(

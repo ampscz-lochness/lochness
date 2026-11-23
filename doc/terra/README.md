@@ -6,14 +6,28 @@ Lochness supports pulling data from **Terra on Google Cloud Platform** (`app.ter
 2. **Table-Referenced GCS Files** — `gs://...` objects referenced inside matched entity table columns.
 3. **Workspace GCS Bucket Files** — files stored directly under subject folders in the workspace's `gs://fc-...` bucket.
 
-## 1. Terra & GCP Setup
+## 1. Authentication Options
 
+Lochness supports **both** Terra authentication methods:
+
+### Option A: Terra Microsoft / Azure AD B2C Login (No Google Account Needed)
+If you sign into `app.terra.bio` using **Sign in with Microsoft** (institutional Entra ID / Azure AD B2C):
+- Authenticate once via Terra's B2C OAuth flow to store a `refresh_token` in Lochness `KeyStore`.
+- At runtime, Lochness refreshes the Terra B2C Bearer token headlessly for Terra REST API calls and automatically exchanges it via Terra Sam (`POST /api/google/v1/user/petServiceAccount/token`) for a temporary GCS token to read workspace buckets.
+
+```bash
+python test/lochness/sources/terra/insert_terra_credentials.py \
+  --key-name terra_prod \
+  --project-id ProCAN \
+  --microsoft-login
+```
+
+### Option B: Google Cloud Service Account JSON Key
+For non-personal automation pipelines:
 1. Create a Google Cloud Service Account in your GCP project and download its JSON key file.
-2. Register the Service Account email in Terra (or add it to a Terra Group) and grant it **Reader** access on the target Terra workspace (`app.terra.bio` → Workspace → Share).
+2. Register the Service Account email in Terra (`broadinstitute/firecloud-tools` `register_service_account.py`) and grant it **Reader** access on the target Terra workspace (`app.terra.bio` → Workspace → Share).
    - If pulling from Requester Pays GCS buckets, grant the Service Account `Service Usage Consumer` on your billing project and set `billing_project` in the data source metadata.
-3. Ensure `supported_data_source_types` includes `terra` (populated automatically by `lochness/scripts/init_db.py` or `test/lochness/sources/terra/insert_terra_data_source.py`).
-
-## 2. Insert Credentials into KeyStore
+3. Insert the Service Account JSON key into Lochness `KeyStore`:
 
 ```bash
 python test/lochness/sources/terra/insert_terra_credentials.py \
@@ -24,7 +38,9 @@ python test/lochness/sources/terra/insert_terra_credentials.py \
 
 Alternatively, omit `keystore_name` (or store `{"auth_mode": "adc"}`) to use Google Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` or GCE/GKE workload identity).
 
-## 3. Register a Terra Data Source
+Ensure `supported_data_source_types` includes `terra` (populated automatically by `lochness/scripts/init_db.py` or `test/lochness/sources/terra/insert_terra_data_source.py`).
+
+## 2. Register a Terra Data Source
 
 ```bash
 python test/lochness/sources/terra/insert_terra_data_source.py \

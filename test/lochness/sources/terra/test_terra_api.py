@@ -128,6 +128,58 @@ class TestAuthentication:
         assert headers == {"Authorization": "Bearer existing-token"}
         creds.refresh.assert_not_called()
 
+    def test_get_credentials_terra_b2c_refresh_and_sam_gcs_exchange(self):
+        creds = terra_api.get_credentials(
+            {
+                "auth_mode": "terra_b2c",
+                "refresh_token": "rt-initial",
+                "client_id": "test-client-id",
+                "token_url": "https://b2c.example/token",
+                "sam_api_url": "https://sam.example",
+            }
+        )
+        assert isinstance(creds, terra_api.TerraB2CCredentials)
+
+        token_resp = MagicMock(status_code=200)
+        token_resp.json.return_value = {
+            "access_token": "b2c-access-tok",
+            "refresh_token": "rt-rotated",
+            "expires_in": 3600,
+        }
+        pet_resp = MagicMock(status_code=200)
+        pet_resp.json.return_value = "ya29.pet-gcs-token"
+
+        with patch(
+            "lochness.sources.terra.api.requests.post",
+            side_effect=[token_resp, pet_resp],
+        ) as post:
+            headers = terra_api.get_auth_headers(creds)
+            assert headers == {"Authorization": "Bearer b2c-access-tok"}
+            assert creds.refresh_token == "rt-rotated"
+
+            # Cached token should be reused without another refresh
+            assert terra_api.get_auth_headers(creds) == {
+                "Authorization": "Bearer b2c-access-tok"
+            }
+
+            gcs_creds = terra_api.get_gcs_credentials(creds)
+            assert gcs_creds.token == "ya29.pet-gcs-token"
+
+        assert post.call_count == 2
+        assert post.call_args_list[0].args[0] == "https://b2c.example/token"
+        assert (
+            post.call_args_list[1].args[0]
+            == "https://sam.example/api/google/v1/user/petServiceAccount/token"
+        )
+
+    def test_get_credentials_terra_b2c_missing_refresh_token_raises(self):
+        with pytest.raises(RuntimeError, match="missing 'refresh_token'"):
+            terra_api.get_credentials({"auth_mode": "terra_b2c"})
+
+    def test_get_gcs_credentials_passthrough_for_google_creds(self):
+        fake_google_creds = MagicMock()
+        assert terra_api.get_gcs_credentials(fake_google_creds) is fake_google_creds
+
 
 class TestTerraRestApi:
     def test_get_workspace_success_and_url_encoding(self):

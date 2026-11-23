@@ -204,9 +204,12 @@ class TestFetchWorkspaceData:
                 }
             },
         ), patch(
+            f"{PULL_MOD}.terra_api.get_gcs_credentials",
+            return_value=fake_creds,
+        ), patch(
             f"{PULL_MOD}.terra_api.create_storage_client",
             return_value=fake_storage_client,
-        ), patch(
+        ) as create_storage_client, patch(
             f"{PULL_MOD}.terra_api.get_entity_types",
             return_value={"sample": {"count": 1}},
         ), patch(
@@ -265,6 +268,10 @@ class TestFetchWorkspaceData:
         assert table_gcs_path.read_bytes() == b"VCF_CONTENT"
         assert bucket_file_path.read_bytes() == b"QC_REPORT"
         assert execute_queries.call_count == 3
+        create_storage_client.assert_called_once_with(
+            credentials=fake_creds,
+            project=None,
+        )
 
         # Re-running with identical remote versions skips all 3 items
         with patch(
@@ -275,6 +282,9 @@ class TestFetchWorkspaceData:
             return_value=keystore,
         ), patch(
             f"{PULL_MOD}.terra_api.get_credentials",
+            return_value=fake_creds,
+        ), patch(
+            f"{PULL_MOD}.terra_api.get_gcs_credentials",
             return_value=fake_creds,
         ), patch(
             f"{PULL_MOD}.terra_api.get_auth_headers",
