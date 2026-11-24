@@ -400,6 +400,85 @@ class TestFetchWorkspaceData:
         assert len(sql_list) == 1
         assert "new-rotated-rt" in sql_list[0]
 
+    def test_pull_workspace_bucket_mirrors_all_blobs(self, tmp_path):
+        ds = make_terra_data_source(
+            keystore_name=None,
+            pull_tables=False,
+            pull_table_gcs_files=False,
+            pull_bucket_files=False,
+            pull_workspace_bucket=True,
+            bucket_name="fc-cohort-bucket",
+            bucket_prefix="",
+            max_workers=4,
+        )
+        cohort_subject = Subject(
+            subject_id="WORKSPACE_COHORT",
+            site_id="COHORT",
+            project_id="ProNET",
+            subject_metadata={},
+        )
+        ds.site_id = "COHORT"
+        ds.project_id = "ProNET"
+
+        b1 = make_fake_blob(
+            "fc-cohort-bucket",
+            "submissions/sub1/wf/call-1/stdout",
+            b"LOG1",
+            md5_hash="m1==",
+        )
+        b2 = make_fake_blob(
+            "fc-cohort-bucket",
+            "submissions/sub1/wf/call-2/output.gvcf.gz",
+            b"GVCFDATA",
+            md5_hash="m2==",
+        )
+
+        with (
+            patch(f"{PULL_MOD}.config.parse", return_value={"lochness_root": str(tmp_path)}),
+            patch(f"{PULL_MOD}.terra_api.get_credentials", return_value=MagicMock()),
+            patch(
+                f"{PULL_MOD}.terra_api.get_auth_headers",
+                return_value={"Authorization": "Bearer tok"},
+            ),
+            patch(f"{PULL_MOD}.terra_api.get_gcs_credentials", return_value=MagicMock()),
+            patch(f"{PULL_MOD}.terra_api.create_storage_client", return_value=MagicMock()),
+            patch(f"{PULL_MOD}.terra_api.iter_gcs_blobs", return_value=iter([b1, b2])),
+            patch(
+                f"{UTILS_MOD}.DataPull.get_most_recent_data_pull_for_file_path",
+                return_value=None,
+            ),
+            patch(f"{UTILS_MOD}.db.execute_queries") as exec_q,
+            patch(f"{UTILS_MOD}.log_event"),
+        ):
+            stats = terra_pull.fetch_workspace_data_for_subjects(
+                terra_data_source=ds,
+                subjects=[cohort_subject],
+                config_file=CONFIG_FILE,
+            )
+
+        assert stats == {
+            "tables_saved": 0,
+            "files_downloaded": 2,
+            "files_skipped": 0,
+            "errors": 0,
+        }
+        exec_q.assert_called_once()
+        out_base = (
+            tmp_path
+            / "Pronet"
+            / "PHOENIX"
+            / "PROTECTED"
+            / "PronetCOHORT"
+            / "raw"
+            / "WORKSPACE_COHORT"
+            / "genomics"
+            / "bucket_files"
+        )
+        assert (out_base / "submissions/sub1/wf/call-1/stdout").read_bytes() == b"LOG1"
+        assert (
+            out_base / "submissions/sub1/wf/call-2/output.gvcf.gz"
+        ).read_bytes() == b"GVCFDATA"
+
 
 class TestPullAllData:
     def test_pull_all_data_filters_sources_and_subjects(self):

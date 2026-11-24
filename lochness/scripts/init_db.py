@@ -8,11 +8,15 @@ from pathlib import Path
 file = Path(__file__).resolve()
 parent = file.parent
 root_dir = None  # pylint: disable=invalid-name
-for parent in file.parents:
-    if parent.name == "lochness_v2":
-        root_dir = parent
+for ancestor in file.parents:
+    if ancestor.name in ("lochness_v2", "lochness") and (ancestor / "lochness").is_dir():
+        root_dir = ancestor
+        break
+if root_dir is None:
+    root_dir = file.parents[2]
 
-sys.path.append(str(root_dir))
+if str(root_dir) not in sys.path:
+    sys.path.append(str(root_dir))
 
 # remove current directory from path
 try:
@@ -21,11 +25,11 @@ except ValueError:
     pass
 
 import logging
-from typing import Dict, Any
+from typing import Any, Dict
 
 from rich.logging import RichHandler
 
-from lochness.helpers import utils, logs
+from lochness.helpers import logs, utils
 from lochness.models import init_db
 
 MODULE_NAME = "lochness.scripts.init_db"

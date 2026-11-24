@@ -5,7 +5,7 @@ Data Source Model for Terra (app.terra.bio on Google Cloud Platform).
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from lochness.helpers import db
 
@@ -17,8 +17,8 @@ class TerraDataSourceMetadata(BaseModel):
     Metadata for a Terra data source.
 
     Supports pulling workspace entity data tables, GCS files referenced by
-    ``gs://`` URIs in those tables, and/or files stored directly under a
-    subject folder in the workspace GCS bucket.
+    ``gs://`` URIs in those tables, subject-scoped GCS bucket folders, and/or
+    entire workspace GCS buckets.
     """
 
     workspace_namespace: str
@@ -31,11 +31,14 @@ class TerraDataSourceMetadata(BaseModel):
     pull_tables: bool = True
     pull_table_gcs_files: bool = True
     pull_bucket_files: bool = False
+    pull_workspace_bucket: bool = False
 
     # Entity table options
     entity_types: Optional[List[str]] = None
     table_format: Literal["json", "tsv", "csv"] = "json"
     subject_id_column: str = "name"
+    subject_id_regex: Optional[str] = None
+    fallback_subject_id: Optional[str] = None
     gcs_uri_columns: Optional[List[str]] = None
 
     # Optional Lochness subject_metadata key for mapping subject_id -> Terra ID
@@ -50,6 +53,9 @@ class TerraDataSourceMetadata(BaseModel):
 
     # Optional GCP project for Requester Pays GCS buckets
     billing_project: Optional[str] = None
+
+    # Parallelism for GCS metadata/download worker pool
+    max_workers: int = Field(default=16, ge=1)
 
     @field_validator("api_url")
     @classmethod

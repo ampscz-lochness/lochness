@@ -8,9 +8,11 @@ import hashlib
 import io
 import json
 import logging
+import re
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 from lochness.helpers import config, db, fs
 from lochness.models.data_pulls import DataPull
@@ -22,6 +24,17 @@ from lochness.sources.terra import api as terra_api
 logger = logging.getLogger(__name__)
 
 VERSION_SIDECAR_SUFFIX = ".terraversion"
+
+CANDIDATE_REF_COLUMNS: Tuple[str, ...] = (
+    "collaborator_participant_id",
+    "participant",
+    "participant_id",
+    "collaborator_sample_id",
+    "collaborator_sample",
+    "sample",
+    "sample_id",
+    "subject_id",
+)
 
 
 def log_event(
@@ -118,9 +131,27 @@ def resolve_terra_subject_id(
     return value if value else None
 
 
+def _apply_subject_id_regex(
+    value: Optional[str],
+    subject_id_regex: Optional[str],
+) -> Optional[str]:
+    """Apply optional regex normalization (using group 1 if present)."""
+    if not value:
+        return None
+    if not subject_id_regex:
+        return value
+    match = re.search(subject_id_regex, value)
+    if not match:
+        return None
+    extracted = match.group(1) if match.lastindex else match.group(0)
+    extracted = extracted.strip()
+    return extracted if extracted else None
+
+
 def extract_entity_subject_id(
     entity: Dict[str, Any],
     subject_id_column: str = "name",
+    subject_id_regex: Optional[str] = None,
 ) -> Optional[str]:
     """
     Extract the subject identifier from a Terra entity record.
@@ -129,13 +160,14 @@ def extract_entity_subject_id(
     - ``subject_id_column == "name"`` -> ``entity["name"]``
     - Primitive attribute values -> ``str(value)``
     - Terra entity references (``{"entityType": ..., "entityName": "..."}``) -> ``entityName``
+    - Optional ``subject_id_regex`` (e.g. stripping ``'1071-ME04962'`` -> ``'ME04962'``)
     """
     if subject_id_column == "name":
         raw_name = entity.get("name")
         if raw_name is None:
             return None
         value = str(raw_name).strip()
-        return value if value else None
+        return _apply_subject_id_regex(value if value else None, subject_id_regex)
 
     attributes = entity.get("attributes")
     if not isinstance(attributes, dict):
@@ -150,15 +182,164 @@ def extract_entity_subject_id(
         if entity_name is None:
             return None
         value = str(entity_name).strip()
-        return value if value else None
+        return _apply_subject_id_regex(value if value else None, subject_id_regex)
 
     value = str(raw_value).strip()
-    return value if value else None
+    return _apply_subject_id_regex(value if value else None, subject_id_regex)
+
+
+def _extract_scalar_ref_token(raw_val: Any) -> Optional[str]:
+    """Extract a scalar string token from a primitive attribute or EntityReference."""
+    if raw_val is None or isinstance(raw_val, (bool, list, tuple)):
+        return None
+    if isinstance(raw_val, dict):
+        if "items" in raw_val:
+            return None
+        ename = raw_val.get("entityName")
+        if ename is None:
+            return None
+        token = str(ename).strip()
+        return token if token else None
+    token = str(raw_val).strip()
+    return token if token else None
+
+
+def build_entity_cross_ref_lookup(
+    tables: Dict[str, List[Dict[str, Any]]],
+    subject_id_column: str = "name",
+    subject_id_regex: Optional[str] = None,
+) -> Dict[str, str]:
+    """
+    Build an unambiguous 1-to-1 lookup mapping entity names and auxiliary IDs
+    (such as ``SM-...``, ``PT-...``, ``MH...``, ``1036-NC28488``) to canonical
+    extracted subject IDs across all tables in a Terra workspace.
+    """
+    lookup: Dict[str, str] = {}
+    ambiguous: Set[str] = set()
+
+    def _register(token: Optional[str], canonical_subject: str) -> None:
+        if not token or token in ambiguous:
+            return
+        existing = lookup.get(token)
+        if existing is not None and existing != canonical_subject:
+            ambiguous.add(token)
+            lookup.pop(token, None)
+            return
+        lookup[token] = canonical_subject
+
+    for entity_type, entities in tables.items():
+        for entity in entities:
+            canonical = extract_entity_subject_id(
+                entity,
+                subject_id_column=subject_id_column,
+                subject_id_regex=subject_id_regex,
+            )
+            if not canonical:
+                continue
+
+            raw_name = _extract_scalar_ref_token(entity.get("name"))
+            if raw_name:
+                _register(raw_name, canonical)
+                _register(f"{entity_type}:{raw_name}", canonical)
+
+            attrs = entity.get("attributes")
+            if not isinstance(attrs, dict):
+                continue
+
+            cols_to_index = set(CANDIDATE_REF_COLUMNS)
+            if subject_id_column != "name":
+                cols_to_index.add(subject_id_column)
+
+            for col in cols_to_index:
+                if col not in attrs:
+                    continue
+                val = attrs[col]
+                token = _extract_scalar_ref_token(val)
+                if token:
+                    _register(token, canonical)
+                    if isinstance(val, dict) and val.get("entityType"):
+                        _register(f"{val['entityType']}:{token}", canonical)
+
+    return lookup
+
+
+def resolve_entity_via_cross_ref(
+    entity: Dict[str, Any],
+    cross_ref_lookup: Dict[str, str],
+) -> Optional[str]:
+    """
+    Resolve an entity's subject ID via ``cross_ref_lookup`` when the entity
+    does not carry ``subject_id_column`` directly (e.g. ``collaborator_sample``).
+
+    Returns ``None`` if no reference matches or if the entity aggregates multiple
+    distinct subjects (e.g. ``sample_set``).
+    """
+    if not cross_ref_lookup:
+        return None
+
+    matched_subjects: Set[str] = set()
+    entity_type = str(entity.get("entityType", "")).strip()
+    raw_name = _extract_scalar_ref_token(entity.get("name"))
+    if raw_name:
+        if entity_type and f"{entity_type}:{raw_name}" in cross_ref_lookup:
+            matched_subjects.add(cross_ref_lookup[f"{entity_type}:{raw_name}"])
+        elif raw_name in cross_ref_lookup:
+            matched_subjects.add(cross_ref_lookup[raw_name])
+
+    attrs = entity.get("attributes")
+    if isinstance(attrs, dict):
+        for key, val in attrs.items():
+            # Multi-item arrays (such as sample_set.samples) that span >1 subject
+            items: Optional[List[Any]] = None
+            if isinstance(val, list):
+                items = val
+            elif isinstance(val, dict) and isinstance(val.get("items"), list):
+                items = val["items"]
+
+            if items is not None:
+                for item in items:
+                    tok = _extract_scalar_ref_token(item)
+                    if not tok:
+                        continue
+                    if isinstance(item, dict) and item.get("entityType"):
+                        typed_key = f"{item['entityType']}:{tok}"
+                        if typed_key in cross_ref_lookup:
+                            matched_subjects.add(cross_ref_lookup[typed_key])
+                            continue
+                    if tok in cross_ref_lookup:
+                        matched_subjects.add(cross_ref_lookup[tok])
+                if len(matched_subjects) > 1:
+                    return None
+                continue
+
+            if key in CANDIDATE_REF_COLUMNS or (
+                isinstance(val, dict) and "entityName" in val
+            ):
+                tok = _extract_scalar_ref_token(val)
+                if not tok:
+                    continue
+                if isinstance(val, dict) and val.get("entityType"):
+                    typed_key = f"{val['entityType']}:{tok}"
+                    if typed_key in cross_ref_lookup:
+                        matched_subjects.add(cross_ref_lookup[typed_key])
+                        continue
+                if tok in cross_ref_lookup:
+                    matched_subjects.add(cross_ref_lookup[tok])
+
+            if len(matched_subjects) > 1:
+                return None
+
+    if len(matched_subjects) == 1:
+        return next(iter(matched_subjects))
+    return None
 
 
 def group_entities_by_subject(
     entities: List[Dict[str, Any]],
     subject_id_column: str = "name",
+    subject_id_regex: Optional[str] = None,
+    cross_ref_lookup: Optional[Dict[str, str]] = None,
+    fallback_subject_id: Optional[str] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
     Group Terra entity rows by extracted subject ID, sorting each subject's
@@ -167,8 +348,14 @@ def group_entities_by_subject(
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for entity in entities:
         subject_key = extract_entity_subject_id(
-            entity, subject_id_column=subject_id_column
+            entity,
+            subject_id_column=subject_id_column,
+            subject_id_regex=subject_id_regex,
         )
+        if not subject_key and cross_ref_lookup:
+            subject_key = resolve_entity_via_cross_ref(entity, cross_ref_lookup)
+        if not subject_key and fallback_subject_id:
+            subject_key = fallback_subject_id
         if not subject_key:
             continue
         grouped.setdefault(subject_key, []).append(entity)
@@ -478,33 +665,38 @@ def should_download_file(
     return True
 
 
-def record_pulled_file(
+@dataclass
+class PreparedPulledFile:
+    """Precomputed File and DataPull metadata ready for batched DB commit."""
+
+    local_file_path: Path
+    remote_version: Optional[str]
+    file_model: File
+    data_pull: DataPull
+    pull_metadata_extra: Dict[str, Any]
+
+
+def prepare_pulled_file_record(
     local_file_path: Path,
     remote_version: Optional[str],
     subject_id: str,
     site_id: str,
     project_id: str,
     data_source_name: str,
-    config_file: Path,
+    lochness_root: str,
     start_time: datetime,
     pull_metadata_extra: Optional[Dict[str, Any]] = None,
-) -> DataPull:
+) -> PreparedPulledFile:
     """
-    Record a newly pulled Terra file in the local version sidecar and Lochness DB
-    (``files`` and ``data_pull`` tables), and emit a structured audit log event.
+    Hash ``local_file_path`` and construct ``File`` + ``DataPull`` models
+    without opening a database connection (safe to run inside worker threads).
     """
-    if remote_version:
-        sidecar_path = get_version_sidecar_path(local_file_path)
-        with fs.atomic_write(sidecar_path, mode="w", encoding="utf-8") as handle:
-            handle.write(remote_version)
-
     file_model = File(file_path=local_file_path, with_hash=True)
     file_md5: str = file_model.md5  # type: ignore[assignment]
 
     end_time = datetime.now()
     pull_time_s = int((end_time - start_time).total_seconds())
 
-    lochness_root: str = config.parse(config_file, "general")["lochness_root"]  # type: ignore[index]
     try:
         relative_path = str(local_file_path.relative_to(lochness_root))
     except ValueError:
@@ -514,8 +706,9 @@ def record_pulled_file(
         "remote_version": remote_version,
         "relative_path": relative_path,
     }
-    if pull_metadata_extra:
-        pull_metadata.update(pull_metadata_extra)
+    extra_copy = dict(pull_metadata_extra) if pull_metadata_extra else {}
+    if extra_copy:
+        pull_metadata.update(extra_copy)
 
     data_pull = DataPull(
         subject_id=subject_id,
@@ -527,29 +720,112 @@ def record_pulled_file(
         pull_time_s=pull_time_s,
         pull_metadata=pull_metadata,
     )
-
-    queries = file_model.to_sql_queries_with_availability_update() + [
-        data_pull.to_sql_query()
-    ]
-    db.execute_queries(config_file, queries, show_commands=False)
-
-    msg = f"Successfully saved Terra data for {subject_id} to {local_file_path}."
-    logger.info(msg)
-    log_event(
-        config_file=config_file,
-        log_level="INFO",
-        event="terra_data_pull_save_success",
-        message=msg,
-        project_id=project_id,
-        site_id=site_id,
-        data_source_name=data_source_name,
-        subject_id=subject_id,
-        extra={
-            "file_path": str(local_file_path),
-            "file_md5": file_md5,
-            "remote_version": remote_version,
-            **(pull_metadata_extra or {}),
-        },
+    return PreparedPulledFile(
+        local_file_path=local_file_path,
+        remote_version=remote_version,
+        file_model=file_model,
+        data_pull=data_pull,
+        pull_metadata_extra=extra_copy,
     )
 
-    return data_pull
+
+def commit_pulled_file_records(
+    records: List[PreparedPulledFile],
+    config_file: Path,
+) -> List[DataPull]:
+    """
+    Commit one or more ``PreparedPulledFile`` records to PostgreSQL in a single
+    transaction, then write ``.terraversion`` sidecar files atomically so a
+    sidecar only exists on disk after its DB rows are durably committed.
+    """
+    if not records:
+        return []
+
+    queries: List[str] = []
+    for rec in records:
+        queries.extend(rec.file_model.to_sql_queries_with_availability_update())
+        queries.append(rec.data_pull.to_sql_query())
+
+    db.execute_queries(config_file, queries, show_commands=False)
+
+    for rec in records:
+        if rec.remote_version:
+            sidecar_path = get_version_sidecar_path(rec.local_file_path)
+            with fs.atomic_write(sidecar_path, mode="w", encoding="utf-8") as handle:
+                handle.write(rec.remote_version)
+
+    if len(records) == 1:
+        rec = records[0]
+        dp = rec.data_pull
+        msg = f"Successfully saved Terra data for {dp.subject_id} to {rec.local_file_path}."
+        logger.info(msg)
+        log_event(
+            config_file=config_file,
+            log_level="INFO",
+            event="terra_data_pull_save_success",
+            message=msg,
+            project_id=dp.project_id,
+            site_id=dp.site_id,
+            data_source_name=dp.data_source_name,
+            subject_id=dp.subject_id,
+            extra={
+                "file_path": str(rec.local_file_path),
+                "file_md5": dp.file_md5,
+                "remote_version": rec.remote_version,
+                **rec.pull_metadata_extra,
+            },
+        )
+    else:
+        first_dp = records[0].data_pull
+        msg = (
+            f"Successfully saved batch of {len(records)} Terra files for "
+            f"{first_dp.project_id}::{first_dp.site_id}::{first_dp.data_source_name}."
+        )
+        logger.info(msg)
+        log_event(
+            config_file=config_file,
+            log_level="INFO",
+            event="terra_data_pull_batch_save_success",
+            message=msg,
+            project_id=first_dp.project_id,
+            site_id=first_dp.site_id,
+            data_source_name=first_dp.data_source_name,
+            extra={"files_committed": len(records)},
+        )
+
+    return [rec.data_pull for rec in records]
+
+
+def record_pulled_file(
+    local_file_path: Path,
+    remote_version: Optional[str],
+    subject_id: str,
+    site_id: str,
+    project_id: str,
+    data_source_name: str,
+    config_file: Path,
+    start_time: datetime,
+    pull_metadata_extra: Optional[Dict[str, Any]] = None,
+    lochness_root: Optional[str] = None,
+) -> DataPull:
+    """
+    Record a newly pulled Terra file in the local version sidecar and Lochness DB
+    (``files`` and ``data_pull`` tables), and emit a structured audit log event.
+    """
+    resolved_root: str = (
+        lochness_root
+        if lochness_root is not None
+        else config.parse(config_file, "general")["lochness_root"]  # type: ignore[index]
+    )
+    prepared = prepare_pulled_file_record(
+        local_file_path=local_file_path,
+        remote_version=remote_version,
+        subject_id=subject_id,
+        site_id=site_id,
+        project_id=project_id,
+        data_source_name=data_source_name,
+        lochness_root=resolved_root,
+        start_time=start_time,
+        pull_metadata_extra=pull_metadata_extra,
+    )
+    return commit_pulled_file_records([prepared], config_file=config_file)[0]

@@ -75,9 +75,12 @@ python test/lochness/sources/terra/insert_terra_data_source.py \
 | `pull_tables` | `true` | Save matched entity table rows per subject |
 | `pull_table_gcs_files` | `true` | Download `gs://` URIs referenced in matched entity rows |
 | `pull_bucket_files` | `false` | Sync files directly from subject folders in the workspace GCS bucket |
+| `pull_workspace_bucket` | `false` | Mirror all blobs in the workspace `gs://fc-...` bucket under the target subject |
 | `entity_types` | `null` | Optional list of Terra entity tables to pull (`null` pulls all tables) |
 | `table_format` | `"json"` | Output format for table extracts: `"json"`, `"tsv"`, or `"csv"` |
 | `subject_id_column` | `"name"` | Entity field/attribute matching subject ID (`"name"` or attribute column, including Terra entity references) |
+| `subject_id_regex` | `null` | Optional regex (with optional capture group 1) to normalize subject IDs (e.g., stripping `'1071-ME04962'` $\rightarrow$ `'ME04962'`) |
+| `fallback_subject_id` | `null` | Optional cohort subject ID for unmatched entity rows (e.g., `sample_set` or QC controls) |
 | `subject_id_metadata_key` | `null` | Optional dot-path in Lochness `subject_metadata` (e.g., `"terra_id"` or `"terra.participant_id"`) |
 | `gcs_uri_columns` | `null` | Optional list of table attribute columns to scan for `gs://` URIs (`null` scans all) |
 | `bucket_name` | `null` | Optional GCS bucket override (defaults to workspace's `bucketName`) |
@@ -86,6 +89,16 @@ python test/lochness/sources/terra/insert_terra_data_source.py \
 | `include_patterns` | `null` | Optional list of glob patterns for GCS files to include (e.g., `["*.bam", "*.vcf.gz"]`) |
 | `exclude_patterns` | `null` | Optional list of glob patterns for GCS files to exclude |
 | `billing_project` | `null` | Optional GCP project for Requester Pays GCS buckets |
+| `max_workers` | `16` | Parallel worker threads for GCS metadata/download operations |
+
+## 3. Auto-Discover Workspaces, Sites & Subjects (Standalone Terra Deployment)
+
+When deploying Lochness without REDCap/RPMS, `refresh_metadata.py` discovers non-public AMP-SCZ Terra workspaces and automatically populates `projects`, `key_store`, 2-letter `sites` + `COHORT`, `subjects`, and `data_sources`:
+
+```bash
+python lochness/sources/terra/tasks/refresh_metadata.py \
+  --b2c-token-json ~/terra_b2c_token.json
+```
 
 ## 4. Running a Pull
 

@@ -7,12 +7,14 @@ import base64
 import logging
 import os
 import secrets
+import threading
 import time
 import urllib.parse
 import webbrowser
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
 import google.auth
@@ -21,7 +23,7 @@ from google.auth.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.cloud import storage
 from google.oauth2 import service_account
-from google.oauth2.credentials import Credentials as GoogleTokenCredentials
+from requests.adapters import HTTPAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,7 @@ class TerraB2CCredentials:
             else 0.0
         )
         self.on_refresh_token_rotated = on_refresh_token_rotated
+        self._lock = threading.Lock()
 
     @property
     def valid(self) -> bool:
@@ -99,7 +102,7 @@ class TerraB2CCredentials:
             "refresh_token": self.refresh_token,
         }
 
-    def refresh(self, timeout: int = 60) -> None:
+    def _refresh_unlocked(self, timeout: int = 60) -> None:
         """Exchange the stored B2C refresh token for a fresh Terra access token."""
         basic_auth = base64.b64encode(f"{self.client_id}:".encode()).decode()
         response = requests.post(
@@ -137,6 +140,22 @@ class TerraB2CCredentials:
         expires_in = int(payload.get("expires_in", 3600))
         self._expires_at = time.monotonic() + max(expires_in - 60, 0)
 
+    def refresh(self, timeout: int = 60) -> None:
+        """Exchange the stored B2C refresh token for a fresh Terra access token."""
+        with self._lock:
+            self._refresh_unlocked(timeout=timeout)
+
+    def ensure_valid(self, timeout: int = 60) -> str:
+        """Thread-safely ensure a valid cached B2C token and return it."""
+        if self.valid and self.token:
+            return self.token
+        with self._lock:
+            if not self.valid or not self.token:
+                self._refresh_unlocked(timeout=timeout)
+            if not self.token:
+                raise RuntimeError("Terra B2C credentials did not yield an access token.")
+            return self.token
+
     def get_gcs_access_token(
         self,
         scopes: Sequence[str] = GCS_READ_ONLY_SCOPES,
@@ -146,14 +165,13 @@ class TerraB2CCredentials:
         Exchange the Terra B2C token via Terra Sam for a temporary Google OAuth2
         access token belonging to the user's Terra Pet Service Account.
         """
-        if not self.valid:
-            self.refresh(timeout=timeout)
+        bearer_token = self.ensure_valid(timeout=timeout)
 
         url = f"{self.sam_api_url}/api/google/v1/user/petServiceAccount/token"
         response = requests.post(
             url,
             headers={
-                "Authorization": f"Bearer {self.token}",
+                "Authorization": f"Bearer {bearer_token}",
                 "Content-Type": "application/json",
             },
             json=list(scopes),
@@ -169,6 +187,40 @@ class TerraB2CCredentials:
         if not isinstance(pet_token, str) or not pet_token:
             raise RuntimeError("Terra Sam returned an invalid pet service account token.")
         return pet_token
+
+
+class TerraSamGCSCredentials(Credentials):
+    """
+    Auto-refreshing Google Cloud Storage credentials backed by
+    ``TerraB2CCredentials`` and Terra Sam Pet Service Account token exchange.
+
+    Google Pet Service Account tokens expire after 1 hour; subclassing
+    ``google.auth.credentials.Credentials`` enables ``google-cloud-storage``
+    to automatically invoke ``refresh()`` during multi-hour transfers.
+    """
+
+    def __init__(
+        self,
+        b2c_credentials: TerraB2CCredentials,
+        scopes: Sequence[str] = GCS_READ_ONLY_SCOPES,
+        refresh_lifetime_minutes: int = 50,
+    ) -> None:
+        super().__init__()
+        self._b2c_credentials = b2c_credentials
+        self._scopes: Tuple[str, ...] = tuple(scopes)
+        self._refresh_lifetime_minutes = refresh_lifetime_minutes
+        self._lock = threading.Lock()
+        self.refresh(None)
+
+    def refresh(self, request: Any) -> None:
+        """Fetch a fresh Sam Pet Service Account GCS token."""
+        with self._lock:
+            pet_token = self._b2c_credentials.get_gcs_access_token(scopes=self._scopes)
+            self.token = pet_token
+            self.expiry = (
+                datetime.now(UTC).replace(tzinfo=None)
+                + timedelta(minutes=self._refresh_lifetime_minutes)
+            )
 
 
 TerraCredentials = Credentials | TerraB2CCredentials
@@ -502,8 +554,7 @@ def get_auth_headers(credentials: TerraCredentials) -> Dict[str, str]:
     """
     try:
         if isinstance(credentials, TerraB2CCredentials):
-            if not credentials.valid or not credentials.token:
-                credentials.refresh()
+            credentials.ensure_valid()
         elif not credentials.valid or not credentials.token:
             credentials.refresh(GoogleAuthRequest())
     except Exception as e:
@@ -524,12 +575,51 @@ def get_gcs_credentials(
 ) -> Credentials:
     """
     Obtain Google Cloud Storage credentials from either ``TerraB2CCredentials``
-    (via Terra Sam Pet Service Account token exchange) or Google ``Credentials``.
+    (via auto-refreshing Terra Sam Pet Service Account token exchange) or
+    Google ``Credentials``.
     """
     if isinstance(credentials, TerraB2CCredentials):
-        pet_token = credentials.get_gcs_access_token(scopes=scopes)
-        return GoogleTokenCredentials(token=pet_token)
+        return TerraSamGCSCredentials(b2c_credentials=credentials, scopes=scopes)
     return credentials
+
+
+def list_workspaces(
+    headers: Dict[str, str],
+    api_url: str = DEFAULT_TERRA_API_URL,
+    fields: Optional[str] = None,
+    timeout: int = 120,
+) -> List[Dict[str, Any]]:
+    """
+    List all Terra workspaces accessible to the authenticated user.
+
+    Args:
+        headers (Dict[str, str]): Authorization headers with Bearer token.
+        api_url (str): Terra/FireCloud API base URL.
+        fields (Optional[str]): Optional comma-separated field projection.
+        timeout (int): HTTP request timeout in seconds.
+
+    Returns:
+        List[Dict[str, Any]]: Workspace summary objects from ``GET /api/workspaces``.
+    """
+    base_url = api_url.rstrip("/")
+    url = f"{base_url}/api/workspaces"
+    params = {"fields": fields} if fields else None
+
+    logger.info("Listing accessible Terra workspaces...")
+    response = requests.get(url, headers=headers, params=params, timeout=timeout)
+    if response.status_code != 200:
+        logger.error(
+            f"Failed to list Terra workspaces (HTTP {response.status_code}): "
+            f"{response.text}"
+        )
+        raise RuntimeError(
+            f"Failed to list Terra workspaces (HTTP {response.status_code}): "
+            f"{response.text}"
+        )
+
+    workspaces = response.json()
+    logger.info(f"Found {len(workspaces)} accessible Terra workspaces.")
+    return workspaces
 
 
 def get_workspace(
@@ -700,18 +790,30 @@ def get_entities(
 def create_storage_client(
     credentials: Credentials,
     project: Optional[str] = None,
+    pool_maxsize: int = 64,
 ) -> storage.Client:
     """
-    Create an authenticated Google Cloud Storage client.
+    Create an authenticated Google Cloud Storage client configured with an
+    expanded HTTP connection pool for parallel downloads.
 
     Args:
         credentials (Credentials): Google OAuth2 credentials.
         project (Optional[str]): Optional GCP project ID.
+        pool_maxsize (int): Maximum pooled HTTPS connections per host.
 
     Returns:
         storage.Client: Authenticated GCS client.
     """
-    return storage.Client(credentials=credentials, project=project)
+    client = storage.Client(credentials=credentials, project=project)
+    http_session = getattr(client, "_http", None)
+    if http_session is not None and hasattr(http_session, "mount"):
+        adapter = HTTPAdapter(
+            pool_connections=pool_maxsize,
+            pool_maxsize=pool_maxsize,
+        )
+        http_session.mount("https://", adapter)
+        http_session.mount("http://", adapter)
+    return client
 
 
 def parse_gcs_uri(gcs_uri: str) -> Tuple[str, str]:
@@ -743,6 +845,22 @@ def parse_gcs_uri(gcs_uri: str) -> Tuple[str, str]:
     return bucket_name, blob_name
 
 
+def iter_gcs_blobs(
+    storage_client: storage.Client,
+    bucket_name: str,
+    prefix: str = "",
+    user_project: Optional[str] = None,
+) -> Iterator[Any]:
+    """
+    Stream all non-directory blobs in a GCS bucket matching an optional prefix.
+    """
+    bucket = storage_client.bucket(bucket_name, user_project=user_project)
+    blobs = storage_client.list_blobs(bucket, prefix=prefix)
+    for blob in blobs:
+        if not blob.name.endswith("/"):
+            yield blob
+
+
 def list_gcs_blobs(
     storage_client: storage.Client,
     bucket_name: str,
@@ -761,9 +879,14 @@ def list_gcs_blobs(
     Returns:
         List[Any]: List of GCS ``Blob`` objects (excluding directory placeholders).
     """
-    bucket = storage_client.bucket(bucket_name, user_project=user_project)
-    blobs = storage_client.list_blobs(bucket, prefix=prefix)
-    result = [blob for blob in blobs if not blob.name.endswith("/")]
+    result = list(
+        iter_gcs_blobs(
+            storage_client=storage_client,
+            bucket_name=bucket_name,
+            prefix=prefix,
+            user_project=user_project,
+        )
+    )
     logger.info(
         f"Found {len(result)} blobs in gs://{bucket_name}/{prefix}."
     )
@@ -807,7 +930,7 @@ def get_gcs_blob_metadata(
 def download_gcs_blob(
     blob: Any,
     local_path: Path,
-    timeout: int = 300,
+    timeout: int = 7200,
 ) -> None:
     """
     Download a GCS blob atomically to ``local_path``.
@@ -824,7 +947,9 @@ def download_gcs_blob(
         RuntimeError: If the download fails.
     """
     local_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = local_path.with_name(f".{local_path.name}.{os.getpid()}.part")
+    temp_path = local_path.with_name(
+        f".{local_path.name}.{os.getpid()}.{threading.get_ident()}.part"
+    )
     logger.info(f"Downloading gs://{blob.bucket.name}/{blob.name} to {local_path}...")
     try:
         blob.download_to_filename(str(temp_path), timeout=timeout)

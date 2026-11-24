@@ -83,13 +83,15 @@ def get_config_file_path() -> Path:
         ConfigFileNotFoundExeption: If the config file is not found.
     """
     repo_root = cli.get_repo_root()
-    config_file_path = repo_root + "/config.ini"
+    config_file_path = Path(repo_root) / "config.ini"
 
-    # Check if config_file_path exists
-    if not Path(config_file_path).is_file():
+    if not config_file_path.is_file():
+        package_repo_config = Path(__file__).resolve().parents[2] / "config.ini"
+        if package_repo_config.is_file():
+            return package_repo_config
         raise FileNotFoundError(f"Config file not found at {config_file_path}")
 
-    return Path(config_file_path)
+    return config_file_path
 
 
 def get_timestamp() -> str:

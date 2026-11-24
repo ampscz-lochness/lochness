@@ -228,6 +228,55 @@ class TestAuthentication:
         fake_google_creds = MagicMock()
         assert terra_api.get_gcs_credentials(fake_google_creds) is fake_google_creds
 
+    def test_terra_sam_gcs_credentials_auto_refreshes_on_expiry(self):
+        creds = terra_api.TerraB2CCredentials(
+            refresh_token="rt-initial",
+            access_token="b2c-valid-tok",
+            expires_in=3600,
+        )
+        pet_resp_1 = MagicMock(status_code=200)
+        pet_resp_1.json.return_value = "ya29.pet-1"
+        pet_resp_2 = MagicMock(status_code=200)
+        pet_resp_2.json.return_value = "ya29.pet-2"
+
+        with patch(
+            "lochness.sources.terra.api.requests.post",
+            side_effect=[pet_resp_1, pet_resp_2],
+        ) as post:
+            gcs_creds = terra_api.get_gcs_credentials(creds)
+            assert isinstance(gcs_creds, terra_api.TerraSamGCSCredentials)
+            assert gcs_creds.token == "ya29.pet-1"
+            assert gcs_creds.expiry is not None
+
+            # Simulate GCS client triggering refresh when token expires
+            gcs_creds.refresh(None)
+            assert gcs_creds.token == "ya29.pet-2"
+
+        assert post.call_count == 2
+
+    def test_list_workspaces_success(self):
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = [
+            {
+                "accessLevel": "READER",
+                "public": False,
+                "workspace": {"namespace": "ns1", "name": "ws1"},
+            }
+        ]
+        with patch(
+            "lochness.sources.terra.api.requests.get", return_value=mock_resp
+        ) as get:
+            items = terra_api.list_workspaces(headers={"Authorization": "Bearer tok"})
+
+        assert len(items) == 1
+        assert items[0]["workspace"]["name"] == "ws1"
+        get.assert_called_once_with(
+            "https://api.firecloud.org/api/workspaces",
+            headers={"Authorization": "Bearer tok"},
+            params=None,
+            timeout=120,
+        )
+
 
 class TestTerraRestApi:
     def test_get_workspace_success_and_url_encoding(self):

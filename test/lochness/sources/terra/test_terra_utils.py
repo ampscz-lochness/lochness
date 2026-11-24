@@ -130,6 +130,103 @@ class TestEntityParsingAndSerialization:
         assert [e["name"] for e in grouped["YA1"]] == ["S1", "S2"]
         assert [e["name"] for e in grouped["YA2"]] == ["S3"]
 
+    def test_subject_id_regex_cross_ref_and_fallback_cohort(self):
+        regex = r"^(?:[^-]+-)?([A-Za-z]{2}\d{5})$"
+        samples = [
+            {
+                "name": "SM-OFDEZ",
+                "entityType": "sample",
+                "attributes": {
+                    "collaborator_participant_id": "1036-NC28488",
+                    "participant_id": "PT-47HYN",
+                    "collaborator_sample_id": "MH0001",
+                },
+            },
+            {
+                "name": "SM-OVMNT",
+                "entityType": "sample",
+                "attributes": {
+                    "collaborator_participant_id": "1071-ME04962",
+                    "participant_id": "PT-99ABC",
+                    "collaborator_sample_id": "MH0002",
+                },
+            },
+            {
+                "name": "SM-CTRL",
+                "entityType": "sample",
+                "attributes": {
+                    "collaborator_participant_id": "NA12878_CONTROL",
+                },
+            },
+        ]
+        collaborator_samples = [
+            {
+                "name": "MH0001",
+                "entityType": "collaborator_sample",
+                "attributes": {
+                    "participant_id": "PT-47HYN",
+                },
+            }
+        ]
+        sample_sets = [
+            {
+                "name": "batch_1",
+                "entityType": "sample_set",
+                "attributes": {
+                    "samples": {
+                        "itemsType": "EntityReference",
+                        "items": [
+                            {"entityType": "sample", "entityName": "SM-OFDEZ"},
+                            {"entityType": "sample", "entityName": "SM-OVMNT"},
+                        ],
+                    }
+                },
+            }
+        ]
+
+        tables = {
+            "sample": samples,
+            "collaborator_sample": collaborator_samples,
+            "sample_set": sample_sets,
+        }
+        cross_ref = terra_utils.build_entity_cross_ref_lookup(
+            tables=tables,
+            subject_id_column="collaborator_participant_id",
+            subject_id_regex=regex,
+        )
+
+        grouped_samples = terra_utils.group_entities_by_subject(
+            samples,
+            subject_id_column="collaborator_participant_id",
+            subject_id_regex=regex,
+            cross_ref_lookup=cross_ref,
+            fallback_subject_id="WORKSPACE_COHORT",
+        )
+        assert list(grouped_samples.keys()) == [
+            "NC28488",
+            "ME04962",
+            "WORKSPACE_COHORT",
+        ]
+        assert grouped_samples["WORKSPACE_COHORT"][0]["name"] == "SM-CTRL"
+
+        grouped_collab = terra_utils.group_entities_by_subject(
+            collaborator_samples,
+            subject_id_column="collaborator_participant_id",
+            subject_id_regex=regex,
+            cross_ref_lookup=cross_ref,
+            fallback_subject_id="WORKSPACE_COHORT",
+        )
+        assert list(grouped_collab.keys()) == ["NC28488"]
+
+        grouped_sets = terra_utils.group_entities_by_subject(
+            sample_sets,
+            subject_id_column="collaborator_participant_id",
+            subject_id_regex=regex,
+            cross_ref_lookup=cross_ref,
+            fallback_subject_id="WORKSPACE_COHORT",
+        )
+        assert list(grouped_sets.keys()) == ["WORKSPACE_COHORT"]
+
     def test_extract_gcs_uris_handles_strings_lists_and_terra_typed_arrays(self):
         entity = {
             "name": "S1",
